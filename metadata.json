@@ -1,0 +1,5 @@
+{
+  "name": "Zoe Car Rental",
+  "description": "Ethiopia's Premium Fleet Experience - Modern, Reliable, Simple.",
+  "requestFramePermissions": ["geolocation"]
+}

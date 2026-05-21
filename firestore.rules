@@ -1,0 +1,169 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (from Firebase Auth)
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required)
+    //   - email: string (required, email format)
+    //   - role: string (required, enum: ['renter', 'host', 'admin'])
+    //   - profilePic: string (optional)
+    //   - phoneNumber: string (optional)
+    //   - nationalId: string (optional)
+    //   - verificationStatus: string (required, enum: ['unverified', 'pending', 'verified', 'rejected', 'blocked'])
+    //   - verificationData: map (optional)
+    //   - createdAt: string (required, date-time format)
+    //
+    // Collection: cars
+    // Document ID: carId
+    // Fields:
+    //   - id: string (required)
+    //   - make: string (required)
+    //   - model: string (required)
+    //   - year: int (required)
+    //   - type: string (required, enum: ['Sedan', 'SUV', 'Luxury', 'Economy', '4x4'])
+    //   - pricePerDay: number (required)
+    //   - features: list (optional)
+    //   - images: list (required)
+    //   - location: map (required)
+    //   - availability: bool (required)
+    //   - hostId: string (required)
+    //   - description: string (optional)
+    //   - transmission: string (optional)
+    //   - fuelType: string (optional)
+    //   - seats: int (optional)
+    //   - rating: number (optional)
+    //   - reviewCount: int (optional)
+    //   - gpsCode: string (optional)
+    //   - status: string (optional)
+    //   - createdAt: string (optional)
+    //
+    // Collection: support_chats
+    // Document ID: messageId
+    // Fields:
+    //   - userId: string (required)
+    //   - text: string (required)
+    //   - senderId: string (required)
+    //   - senderName: string (required)
+    //   - isAdmin: bool (required)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: bookings
+    // Document ID: bookingId
+    // Fields:
+    //   - id: string (required)
+    //   - carId: string (required)
+    //   - userId: string (required)
+    //   - hostId: string (required)
+    //   - startDate: string (required, date-time format)
+    //   - endDate: string (required, date-time format)
+    //   - totalAmount: number (required)
+    //   - status: string (required, enum: ['pending', 'confirmed', 'cancelled', 'completed'])
+    //   - paymentStatus: string (required, enum: ['unpaid', 'paid', 'refunded'])
+    //   - createdAt: string (required, date-time format)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "mmwsundayschool@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'email', 'role', 'profilePic', 'phoneNumber', 'nationalId', 'verificationStatus', 'verificationData', 'createdAt']) &&
+             data.id is string && data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidEmail(data.email) &&
+             data.role in ['renter', 'host', 'admin'] &&
+             data.verificationStatus in ['unverified', 'pending', 'verified', 'rejected', 'blocked'] &&
+             isValidDateString(data.createdAt);
+    }
+
+    function isValidCar(data) {
+      return hasOnlyAllowedFields(['id', 'make', 'model', 'year', 'type', 'pricePerDay', 'features', 'images', 'location', 'availability', 'hostId', 'description', 'transmission', 'fuelType', 'seats', 'rating', 'reviewCount', 'gpsCode', 'status', 'createdAt']) &&
+             data.make is string && data.model is string &&
+             data.year is int && data.year >= 1900 && data.year <= 2100 &&
+             data.pricePerDay is number && data.pricePerDay > 0 &&
+             data.images is list && data.images.size() > 0 &&
+             data.location is map &&
+             data.availability is bool &&
+             data.hostId is string;
+    }
+
+    function isValidBooking(data) {
+      return hasOnlyAllowedFields(['id', 'carId', 'userId', 'hostId', 'startDate', 'endDate', 'totalAmount', 'status', 'paymentStatus', 'createdAt']) &&
+             data.id is string && data.carId is string && data.userId is string && data.hostId is string &&
+             isValidDateString(data.startDate) && isValidDateString(data.endDate) &&
+             data.totalAmount is number && data.totalAmount > 0 &&
+             data.status in ['pending', 'confirmed', 'cancelled', 'completed'] &&
+             data.paymentStatus in ['unpaid', 'paid', 'refunded'] &&
+             isValidDateString(data.createdAt);
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role != 'admin' || isAdmin());
+      allow update: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && (request.resource.data.role == resource.data.role || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /cars/{carId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.hostId && isValidCar(request.resource.data);
+      allow update: if isAuthenticated() && (request.auth.uid == resource.data.hostId || isAdmin()) && isValidCar(request.resource.data);
+      allow delete: if isAuthenticated() && (request.auth.uid == resource.data.hostId || isAdmin());
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || request.auth.uid == resource.data.hostId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && isValidBooking(request.resource.data);
+      allow update: if isAuthenticated() && (request.auth.uid == resource.data.userId || request.auth.uid == resource.data.hostId || isAdmin()) && isValidBooking(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /support_chats/{messageId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

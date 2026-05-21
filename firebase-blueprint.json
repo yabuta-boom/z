@@ -1,0 +1,117 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["renter", "host", "admin"] },
+        "profilePic": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "nationalId": { "type": "string" },
+        "verificationStatus": { "type": "string", "enum": ["unverified", "pending", "verified", "rejected", "blocked"] },
+        "verificationData": {
+          "type": "object",
+          "properties": {
+            "idFront": { "type": "string" },
+            "idBack": { "type": "string" },
+            "licenseFront": { "type": "string" },
+            "licenseBack": { "type": "string" },
+            "selfie": { "type": "string" },
+            "verifiedAt": { "type": "string", "format": "date-time" },
+            "rejectionReason": { "type": "string" },
+            "idNumber": { "type": "string" },
+            "fullName": { "type": "string" },
+            "expiryDate": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "role", "verificationStatus", "createdAt"]
+    },
+    "Car": {
+      "title": "Car",
+      "description": "Car listing information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "make": { "type": "string" },
+        "model": { "type": "string" },
+        "year": { "type": "integer" },
+        "type": { "type": "string", "enum": ["Sedan", "SUV", "Luxury", "Economy", "4x4"] },
+        "pricePerDay": { "type": "number" },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "images": { "type": "array", "items": { "type": "string" } },
+        "location": {
+          "type": "object",
+          "properties": {
+            "address": { "type": "string" },
+            "city": { "type": "string" }
+          }
+        },
+        "availability": { "type": "boolean" },
+        "hostId": { "type": "string" },
+        "description": { "type": "string" },
+        "gpsCode": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "rating": { "type": "number" },
+        "reviewCount": { "type": "integer" }
+      },
+      "required": ["make", "model", "year", "type", "pricePerDay", "images", "location", "availability", "hostId"]
+    },
+    "SupportChat": {
+      "title": "SupportChat",
+      "description": "Support chat messages",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "text": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "isAdmin": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "text", "senderId", "senderName", "isAdmin", "createdAt"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Booking information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "carId": { "type": "string" },
+        "userId": { "type": "string" },
+        "hostId": { "type": "string" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "endDate": { "type": "string", "format": "date-time" },
+        "totalAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "confirmed", "cancelled", "completed"] },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "paid", "refunded"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "carId", "userId", "hostId", "startDate", "endDate", "totalAmount", "status", "paymentStatus", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles"
+    },
+    "/cars/{carId}": {
+      "schema": "Car",
+      "description": "Car listings"
+    },
+    "/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Bookings"
+    },
+    "/support_chats/{messageId}": {
+      "schema": "SupportChat",
+      "description": "Support chat messages"
+    }
+  }
+}
