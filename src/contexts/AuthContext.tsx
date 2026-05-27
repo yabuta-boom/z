@@ -15,7 +15,7 @@ interface AuthContextType {
   loading: boolean;
   login: () => Promise<void>;
   logout: () => Promise<void>;
-  signUp: (email: string, pass: string, name: string, phoneNumber: string, role: 'renter' | 'host') => Promise<void>;
+  signUp: (email: string, pass: string, name: string, phoneNumber: string, role: 'renter' | 'host' | 'corporate_renter') => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   demoSignIn: (email: string, pass: string) => Promise<void>;
   updateVerification: (data: Partial<UserProfile>) => Promise<void>;
@@ -79,7 +79,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProfile(null);
   };
 
-  const signUp = async (email: string, pass: string, name: string, phoneNumber: string, role: 'renter' | 'host') => {
+  const signUp = async (email: string, pass: string, name: string, phoneNumber: string, role: 'renter' | 'host' | 'corporate_renter') => {
     const existing = getStoredUsers().find(u => u.email === email);
     if (existing) {
       throw new Error('An account with this email already exists.');
@@ -121,14 +121,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     const isRenter = pass === '#1renter';
     const isHost = pass === '#1Host';
-    if (!isRenter && !isHost) {
+    const isCorporate = pass === '#1Company';
+    if (!isRenter && !isHost && !isCorporate) {
       throw new Error('Invalid demo password');
     }
-    const role = isRenter ? 'renter' : 'host';
-    const uid = role === 'renter' ? 'demo-renter-id' : 'demo-host-id';
+    const role = isCorporate ? 'corporate_renter' : isRenter ? 'renter' : 'host';
+    const uid = isCorporate ? 'demo-corporate-id' : isRenter ? 'demo-renter-id' : 'demo-host-id';
     const demoProfile: UserProfile = {
       id: uid,
-      name: role === 'renter' ? 'Demo Renter' : 'Demo Host',
+      name: isCorporate ? 'Yeabsera Mekbeb' : isRenter ? 'Demo Renter' : 'Demo Host',
       email,
       role,
       phoneNumber: '+251911111111',

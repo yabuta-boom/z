@@ -1,4 +1,4 @@
-import { Car } from '../types';
+import { Car, CorporateProfile, CorporateDocument, CorporateBookingRequest } from '../types';
 
 export interface FleetCar {
   id: string;
@@ -481,7 +481,9 @@ export function initSampleRentals() {
   }
 }
 
-// ─── Rental Request (pre-payment approval) ───────────
+// ─── Booking Request (v2 - Digital Bank Freeze flow) ──
+export type BookingStatus = 'pending' | 'host_accepted' | 'bank_hold_active' | 'payment_completed' | 'rejected' | 'expired';
+
 export interface RentalRequest {
   id: string;
   renterName: string;
@@ -510,95 +512,115 @@ export interface RentalRequest {
   totalAmount: number;
   paymentMethod: string;
   notes: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: BookingStatus;
   createdAt: string;
+  /** ISO timestamp when host accepted (for 15-min timeout) */
+  hostAcceptedAt?: string;
+  /** ISO timestamp when bank hold was approved */
+  bankHoldApprovedAt?: string;
+  /** Insurance total = days * 100 */
+  insuranceAmount?: number;
 }
 
-const RENTAL_REQ_KEY = 'zoe_rental_requests';
-const RENTAL_REQ_INIT_KEY = 'zoe_rental_req_initialized';
+const BOOKING_KEY = 'zoe_booking_requests_v2';
+const BOOKING_INIT_KEY = 'zoe_booking_v2_initialized';
 
-const SAMPLE_RENTAL_REQUESTS: RentalRequest[] = [
-  {
-    id: 'req-1',
-    renterName: 'Meron Alemu',
-    renterPhone: '+251911555777',
-    renterEmail: 'meron.alemu@gmail.com',
-    renterPhoto: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=150',
-    renterAddress: 'Bole, Addis Ababa',
-    age: '32',
-    familyNumber: '+251911222333',
-    relation: 'Spouse',
-    familyName: 'Biruk Alemu',
-    purpose: 'Family road trip to Lalibela for Easter celebration',
-    nationalId: 'FD-1122-3344',
-    nationalIdPhotoFront: 'https://www.ethiotelecom.et/wp-content/uploads/2024/04/IMG_9415.jpg',
-    nationalIdPhotoBack: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR_edMhrpxTKfWyiyMSGyl-kjPEldLqsS7KAw&s',
-    driverLicense: 'DL-ETH-77665',
-    driverLicensePhotoFront: 'https://tagmefy.com/media/data/28/e8/28e80c82-e2b3-443d-b99a-8f01532d99e2.jpg.610x430_q85_background-%23ffffff_crop_upscale.jpg',
-    driverLicensePhotoBack: 'https://www.rentadriveruganda.com/wp-content/uploads/2022/06/driver-license-back.png',
-    carId: 'sample-car-2',
-    carMake: 'Toyota',
-    carModel: 'Land Cruiser Prado',
-    carPlate: 'AA-67890',
-    carImage: 'https://images.turo.com/media/vehicle/images/KbXRKhxYQVG2yXhpWTzQ6A.1200x630.jpg',
-    startDate: '2026-05-20T09:00:00Z',
-    endDate: '2026-05-25T18:00:00Z',
-    totalAmount: 60000,
-    paymentMethod: 'm-pesa',
-    notes: 'Planning a family trip to Bahir Dar. Need the Prado for long-distance comfort.',
-    status: 'pending',
-    createdAt: '2026-05-08T14:30:00Z',
-  },
-  {
-    id: 'req-2',
-    renterName: 'Yonas Tadesse',
-    renterPhone: '+251922334411',
-    renterEmail: 'yonas.tadesse@gmail.com',
-    renterPhoto: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150',
-    renterAddress: 'Piassa, Addis Ababa',
-    age: '45',
-    familyNumber: '+251922555666',
-    relation: 'Brother',
-    familyName: 'Mekonnen Tadesse',
-    purpose: 'Construction material transport for ongoing building project',
-    nationalId: 'FD-5566-7788',
-    nationalIdPhotoFront: 'https://www.ethiotelecom.et/wp-content/uploads/2024/04/IMG_9415.jpg',
-    nationalIdPhotoBack: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR_edMhrpxTKfWyiyMSGyl-kjPEldLqsS7KAw&s',
-    driverLicense: 'DL-ETH-44332',
-    driverLicensePhotoFront: 'https://tagmefy.com/media/data/28/e8/28e80c82-e2b3-443d-b99a-8f01532d99e2.jpg.610x430_q85_background-%23ffffff_crop_upscale.jpg',
-    driverLicensePhotoBack: 'https://www.rentadriveruganda.com/wp-content/uploads/2022/06/driver-license-back.png',
-    carId: 'sample-car-5',
-    carMake: 'Nissan',
-    carModel: 'Navara',
-    carPlate: 'AA-97531',
-    carImage: 'https://images.unsplash.com/photo-1586191582151-f73872dfd183?auto=format&fit=crop&q=80&w=800',
-    startDate: '2026-05-22T08:00:00Z',
-    endDate: '2026-05-28T17:00:00Z',
-    totalAmount: 36000,
-    paymentMethod: 'cash',
-    notes: 'Need the pickup for construction material transport. Will have a helper riding along.',
-    status: 'pending',
-    createdAt: '2026-05-08T16:15:00Z',
-  },
-];
+export type { BookingStatus as BookingStatusAlias };
 
-export function getRentalRequests(): RentalRequest[] {
-  try { return JSON.parse(localStorage.getItem(RENTAL_REQ_KEY) || '[]'); }
+export function getBookingRequests(): RentalRequest[] {
+  try { return JSON.parse(localStorage.getItem(BOOKING_KEY) || '[]'); }
   catch { return []; }
 }
 
-export function saveRentalRequests(requests: RentalRequest[]) {
-  localStorage.setItem(RENTAL_REQ_KEY, JSON.stringify(requests));
+export function saveBookingRequests(requests: RentalRequest[]) {
+  localStorage.setItem(BOOKING_KEY, JSON.stringify(requests));
 }
 
-export function initSampleRentalRequests() {
-  const existing = getRentalRequests();
-  if (existing.length === 0) {
-    saveRentalRequests(SAMPLE_RENTAL_REQUESTS);
-  } else if (!('age' in existing[0])) {
-    // Migrate old-format data to new sample data
-    saveRentalRequests(SAMPLE_RENTAL_REQUESTS);
-  }
+/** Simulated bank pre-authorization hold API */
+export function simulateBankHold(amount: number): Promise<{ status: string; holdId: string }> {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      resolve({ status: 'HOLD_SUCCESS', holdId: 'HOLD-' + Date.now().toString(36).toUpperCase() });
+    }, 2000);
+  });
+}
+
+/** Check if a booking has expired (15-min timeout from host_accepted) */
+export function isBookingExpired(req: RentalRequest): boolean {
+  if (req.status !== 'host_accepted' || !req.hostAcceptedAt) return false;
+  const elapsed = Date.now() - new Date(req.hostAcceptedAt).getTime();
+  return elapsed > 15 * 60 * 1000;
+}
+
+/** Initialize fresh sample data for v2 booking system */
+export function initFreshBookingSystem() {
+  if (localStorage.getItem(BOOKING_INIT_KEY)) return;
+  const fresh: RentalRequest[] = [
+    {
+      id: 'v2-req-1',
+      renterName: 'Meron Alemu',
+      renterPhone: '+251911555777',
+      renterEmail: 'meron.alemu@gmail.com',
+      renterPhoto: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=150',
+      renterAddress: 'Bole, Addis Ababa',
+      age: '32',
+      familyNumber: '+251911222333',
+      relation: 'Spouse',
+      familyName: 'Biruk Alemu',
+      purpose: 'Family road trip to Lalibela for Easter celebration',
+      nationalId: 'FD-1122-3344',
+      nationalIdPhotoFront: 'https://www.ethiotelecom.et/wp-content/uploads/2024/04/IMG_9415.jpg',
+      nationalIdPhotoBack: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR_edMhrpxTKfWyiyMSGyl-kjPEldLqsS7KAw&s',
+      driverLicense: 'DL-ETH-77665',
+      driverLicensePhotoFront: 'https://tagmefy.com/media/data/28/e8/28e80c82-e2b3-443d-b99a-8f01532d99e2.jpg.610x430_q85_background-%23ffffff_crop_upscale.jpg',
+      driverLicensePhotoBack: 'https://www.rentadriveruganda.com/wp-content/uploads/2022/06/driver-license-back.png',
+      carId: 'sample-car-2',
+      carMake: 'Toyota',
+      carModel: 'Land Cruiser Prado',
+      carPlate: 'AA-67890',
+      carImage: 'https://images.turo.com/media/vehicle/images/KbXRKhxYQVG2yXhpWTzQ6A.1200x630.jpg',
+      startDate: '2026-05-20T09:00:00Z',
+      endDate: '2026-05-25T18:00:00Z',
+      totalAmount: 60000,
+      paymentMethod: 'm-pesa',
+      notes: 'Planning a family trip to Bahir Dar. Need the Prado for long-distance comfort.',
+      status: 'pending',
+      createdAt: '2026-05-08T14:30:00Z',
+    },
+    {
+      id: 'v2-req-2',
+      renterName: 'Yonas Tadesse',
+      renterPhone: '+251922334411',
+      renterEmail: 'yonas.tadesse@gmail.com',
+      renterPhoto: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150',
+      renterAddress: 'Piassa, Addis Ababa',
+      age: '45',
+      familyNumber: '+251922555666',
+      relation: 'Brother',
+      familyName: 'Mekonnen Tadesse',
+      purpose: 'Construction material transport for ongoing building project',
+      nationalId: 'FD-5566-7788',
+      nationalIdPhotoFront: 'https://www.ethiotelecom.et/wp-content/uploads/2024/04/IMG_9415.jpg',
+      nationalIdPhotoBack: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcR_edMhrpxTKfWyiyMSGyl-kjPEldLqsS7KAw&s',
+      driverLicense: 'DL-ETH-44332',
+      driverLicensePhotoFront: 'https://tagmefy.com/media/data/28/e8/28e80c82-e2b3-443d-b99a-8f01532d99e2.jpg.610x430_q85_background-%23ffffff_crop_upscale.jpg',
+      driverLicensePhotoBack: 'https://www.rentadriveruganda.com/wp-content/uploads/2022/06/driver-license-back.png',
+      carId: 'sample-car-5',
+      carMake: 'Nissan',
+      carModel: 'Navara',
+      carPlate: 'AA-97531',
+      carImage: 'https://images.unsplash.com/photo-1586191582151-f73872dfd183?auto=format&fit=crop&q=80&w=800',
+      startDate: '2026-05-22T08:00:00Z',
+      endDate: '2026-05-28T17:00:00Z',
+      totalAmount: 36000,
+      paymentMethod: 'cash',
+      notes: 'Need the pickup for construction material transport. Will have a helper riding along.',
+      status: 'pending',
+      createdAt: '2026-05-08T16:15:00Z',
+    },
+  ];
+  saveBookingRequests(fresh);
+  localStorage.setItem(BOOKING_INIT_KEY, 'true');
 }
 
 // ─── Return Request (post-return approval) ───────────
@@ -748,4 +770,156 @@ export function initSampleReturnRequests() {
     // Ensure we have 3 pending return samples
     saveReturnRequests(SAMPLE_RETURN_REQUESTS);
   }
+}
+
+// ─── Corporate Booking System ──
+
+const CORP_PROFILE_KEY = 'zoe_corporate_profiles';
+const CORP_BOOKING_KEY = 'zoe_corporate_bookings';
+
+export function getCorporateProfiles(): CorporateProfile[] {
+  try { return JSON.parse(localStorage.getItem(CORP_PROFILE_KEY) || '[]'); }
+  catch { return []; }
+}
+
+export function saveCorporateProfiles(profiles: CorporateProfile[]) {
+  localStorage.setItem(CORP_PROFILE_KEY, JSON.stringify(profiles));
+}
+
+export function getCorporateProfileByUserId(userId: string): CorporateProfile | undefined {
+  return getCorporateProfiles().find(p => p.userId === userId);
+}
+
+export async function getCorporateBookingRequests(): Promise<CorporateBookingRequest[]> {
+  try {
+    const { getAll } = await import('./corporateBookingDB');
+    return await getAll();
+  } catch { return []; }
+}
+
+export async function saveCorporateBookingRequests(requests: CorporateBookingRequest[]) {
+  try {
+    const { saveAll } = await import('./corporateBookingDB');
+    await saveAll(requests);
+  } catch { /* fall through */ }
+}
+
+export async function addCorporateBookingRequest(req: CorporateBookingRequest) {
+  try {
+    const { add } = await import('./corporateBookingDB');
+    await add(req);
+  } catch { /* fall through */ }
+}
+
+export async function getCorporateBookingRequestById(id: string): Promise<CorporateBookingRequest | undefined> {
+  try {
+    const { getById } = await import('./corporateBookingDB');
+    return await getById(id);
+  } catch { return undefined; }
+}
+
+export function isCorporateBookingExpired(req: CorporateBookingRequest): boolean {
+  if (req.status !== 'host_accepted' || !req.hostAcceptedAt) return false;
+  const elapsed = Date.now() - new Date(req.hostAcceptedAt).getTime();
+  return elapsed > 15 * 60 * 1000;
+}
+
+export async function updateCorporateBookingRequest(id: string, updates: Partial<CorporateBookingRequest>) {
+  try {
+    const { update } = await import('./corporateBookingDB');
+    await update(id, updates);
+  } catch { /* fall through */ }
+}
+
+const CORP_INIT_KEY = 'zoe_corp_init';
+
+export async function initSampleCorporateBookings() {
+  if (localStorage.getItem(CORP_INIT_KEY)) return;
+  const existing = await getCorporateBookingRequests();
+  if (existing.length > 0) return;
+  const samples: CorporateBookingRequest[] = [
+    {
+      id: 'corp-sample-1',
+      userId: 'corp-demo-user',
+      corporateProfileId: 'corp-profile-1',
+      carId: 'sample-car-6',
+      carMake: 'Mercedes-Benz',
+      carModel: 'E-Class',
+      carPlate: 'AA-86420',
+      carImage: 'https://images.unsplash.com/photo-1616422285623-13ff0162193c?auto=format&fit=crop&q=80&w=800',
+      companyName: 'ABC Logistics PLC',
+      bookingDepartment: 'Logistics',
+      registrantPosition: 'Fleet Manager',
+      renterFullName: 'John Doe',
+      renterAge: '34',
+      renterAddress: 'Bole, Addis Ababa',
+      companyEmail: 'fleet@abclogistics.com',
+      companyPhone: '+251911123456',
+      renterPhone: '+251911123456',
+      rentalPurpose: 'Executive transport for client meetings',
+      operatingArea: 'Addis Ababa, Bishoftu',
+      phoneVerified: true,
+      nationalIdVerified: true,
+      nationalIdFront: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      nationalIdBack: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      driverLicenseFront: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      driverLicenseBack: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      livenessPhoto: '',
+      documents: [],
+      startDate: '2026-05-10T09:00:00Z',
+      endDate: '2026-05-14T18:00:00Z',
+      totalAmount: 72000,
+      paymentMethod: 'telebirr',
+      insuranceAmount: 500,
+      status: 'payment_completed',
+      createdAt: '2026-05-08T10:00:00Z',
+      hostAcceptedAt: '2026-05-08T10:05:00Z',
+      bankHoldApprovedAt: '2026-05-08T10:08:00Z',
+      paymentCompletedAt: '2026-05-08T10:15:00Z',
+    },
+    {
+      id: 'corp-sample-2',
+      userId: 'corp-demo-user',
+      corporateProfileId: 'corp-profile-1',
+      carId: 'sample-car-2',
+      carMake: 'Toyota',
+      carModel: 'Land Cruiser Prado',
+      carPlate: 'AA-67890',
+      carImage: 'https://images.turo.com/media/vehicle/images/KbXRKhxYQVG2yXhpWTzQ6A.1200x630.jpg',
+      companyName: 'ABC Logistics PLC',
+      bookingDepartment: 'Executive',
+      registrantPosition: 'Fleet Manager',
+      renterFullName: 'John Doe',
+      renterAge: '34',
+      renterAddress: 'Bole, Addis Ababa',
+      companyEmail: 'fleet@abclogistics.com',
+      companyPhone: '+251911123456',
+      renterPhone: '+251911123456',
+      rentalPurpose: 'Long-distance transport to Hawassa',
+      operatingArea: 'Addis Ababa, Hawassa',
+      phoneVerified: true,
+      nationalIdVerified: true,
+      nationalIdFront: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      nationalIdBack: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      driverLicenseFront: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      driverLicenseBack: 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+      livenessPhoto: '',
+      documents: [],
+      startDate: '2026-05-20T08:00:00Z',
+      endDate: '2026-05-25T17:00:00Z',
+      totalAmount: 60000,
+      paymentMethod: 'bank_transfer',
+      insuranceAmount: 600,
+      status: 'payment_completed',
+      createdAt: '2026-05-15T14:00:00Z',
+      hostAcceptedAt: '2026-05-15T14:05:00Z',
+      bankHoldApprovedAt: '2026-05-15T14:08:00Z',
+      paymentCompletedAt: '2026-05-15T14:20:00Z',
+    },
+  ];
+  const { add } = await import('./corporateBookingDB');
+  for (const req of samples) {
+    await add(req);
+  }
+  localStorage.setItem(CORP_INIT_KEY, 'true');
 }

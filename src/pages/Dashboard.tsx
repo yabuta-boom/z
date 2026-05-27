@@ -6,7 +6,8 @@ import {
   Settings, LogOut, Clock, CheckCircle2, XCircle, ChevronRight,
   ArrowLeft, ShieldCheck, UserCheck, Heart, History, Menu, LayoutDashboard,
   Star, MapPin, Bell, Home, Loader2, ClipboardCheck, FileText, Send,
-  AlertCircle, Pencil, Save, Trash2, ExternalLink, Download, X
+  AlertCircle, Pencil, Save, Trash2, ExternalLink, Download, X, Lock,
+  Building2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../contexts/AuthContext';
@@ -17,13 +18,16 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Booking, Car } from '../types';
+import { Booking, Car, CorporateBookingRequest, CorporateProfile } from '../types';
 import { MOCK_CARS } from '../constants';
 import { format } from 'date-fns';
 import { jsPDF } from 'jspdf';
 import { 
-  RentalRequest, getRentalRequests, saveRentalRequests, initSampleRentalRequests,
-  FleetCar, getFleet, getApprovedFleetCars
+  RentalRequest, getBookingRequests, saveBookingRequests, initFreshBookingSystem,
+  isBookingExpired, simulateBankHold,
+  FleetCar, getFleet, getApprovedFleetCars,
+  getCorporateBookingRequests, getCorporateProfileByUserId, saveCorporateBookingRequests,
+  initSampleCorporateBookings
 } from '../lib/fleetUtils';
 
 interface PaymentRecord {
@@ -70,9 +74,9 @@ export const Dashboard = () => {
   const [requestNotes, setRequestNotes] = useState('');
   const [selectedCarId, setSelectedCarId] = useState('');
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
-  const [autoApprovingId, setAutoApprovingId] = useState<string | null>(null);
-  const [approvedReqId, setApprovedReqId] = useState<string | null>(null);
   const [hostFleet, setHostFleet] = useState<FleetCar[]>([]);
+  // Bank hold approval inline
+  const [bankHoldingId, setBankHoldingId] = useState<string | null>(null);
   const [sampleTrips] = useState<Booking[]>(SAMPLE_TRIPS);
   const [samplePayments] = useState<PaymentRecord[]>(SAMPLE_PAYMENTS);
   const [sampleFavorites] = useState<FavoriteItem[]>(SAMPLE_FAVORITES);
@@ -80,6 +84,12 @@ export const Dashboard = () => {
   const [showPdfPreview, setShowPdfPreview] = useState(false);
   const [previewTrip, setPreviewTrip] = useState<Booking | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [corpPdfPreview, setCorpPdfPreview] = useState<CorporateBookingRequest | null>(null);
+  const [showCorpPdfPreview, setShowCorpPdfPreview] = useState(false);
+  const [isExportingCorpPdf, setIsExportingCorpPdf] = useState(false);
+  const [corporateBookings, setCorporateBookings] = useState<CorporateBookingRequest[]>([]);
+  const [corpProfile, setCorpProfile] = useState<CorporateProfile | null>(null);
+  const [corpBankHoldingId, setCorpBankHoldingId] = useState<string | null>(null);
 
   // Settings form state
   const [settingsName, setSettingsName] = useState('');
@@ -105,9 +115,15 @@ export const Dashboard = () => {
       navigate('/host');
       return;
     }
-    initSampleRentalRequests();
-    setRentalRequests(getRentalRequests());
+    initFreshBookingSystem();
+    setRentalRequests(getBookingRequests());
     setHostFleet(getApprovedFleetCars());
+    if (profile?.role === 'corporate_renter' && user) {
+      initSampleCorporateBookings().then(() => {
+        getCorporateBookingRequests().then(bookings => setCorporateBookings(bookings));
+      });
+      setCorpProfile(getCorporateProfileByUserId(user.uid));
+    }
   }, [user, profile, loading, navigate]);
 
   const handleLogout = async () => {
@@ -116,6 +132,9 @@ export const Dashboard = () => {
   };
 
   function RentalPDFTemplate({ trip, car }: { trip: Booking; car?: Car }) {
+    const days = Math.ceil((new Date(trip.endDate).getTime() - new Date(trip.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    const insuranceAmount = days * 100;
+    const securityHold = 10000;
     return (
       <div style={{
         width: '210mm', minHeight: '297mm', padding: '15mm 20mm',
@@ -164,6 +183,7 @@ export const Dashboard = () => {
             <tbody>
               <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700, width: '40%' }}>Start Date</td><td style={{ padding: '4px 8px' }}>{new Date(trip.startDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
               <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>End Date</td><td style={{ padding: '4px 8px' }}>{new Date(trip.endDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Duration</td><td style={{ padding: '4px 8px' }}>{days} {days === 1 ? 'day' : 'days'}</td></tr>
             </tbody>
           </table>
         </div>
@@ -187,11 +207,32 @@ export const Dashboard = () => {
         <div style={{ marginBottom: '15px' }}>
           <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1a56db', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Payment Receipt</h2>
           <div style={{ padding: '12px', background: '#fefce8', border: '1px solid #fde68a', borderRadius: '6px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span style={{ fontWeight: 700 }}>Total Amount</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+              <span style={{ fontWeight: 700, fontSize: '11px' }}>Rental Fee ({days} {days === 1 ? 'day' : 'days'})</span>
+              <span style={{ fontWeight: 700, fontSize: '11px' }}>ETB {(trip.totalAmount - insuranceAmount).toLocaleString()}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ fontSize: '10px', color: '#666' }}>Daily Insurance (100 ETB × {days} {days === 1 ? 'day' : 'days'})</span>
+              <span style={{ fontSize: '10px', color: '#666' }}>ETB {insuranceAmount.toLocaleString()}</span>
+            </div>
+            <div style={{ borderTop: '1px solid #fde68a', margin: '4px 0', paddingTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700 }}>Total Paid</span>
               <span style={{ fontSize: '18px', fontWeight: 800, color: '#ca8a04' }}>ETB {trip.totalAmount.toLocaleString()}</span>
             </div>
-            <p style={{ margin: 0, fontSize: '10px', color: '#a16207' }}>Payment Status: <strong>{trip.paymentStatus === 'paid' ? 'Paid' : trip.paymentStatus === 'unpaid' ? 'Unpaid' : trip.paymentStatus}</strong> &middot; Transaction: {trip.id.toUpperCase()}</p>
+            <p style={{ margin: 0, fontSize: '10px', color: '#a16207' }}>Payment Status: <strong>{trip.paymentStatus === 'paid' ? 'Paid' : trip.paymentStatus === 'unpaid' ? 'Unpaid' : trip.paymentStatus}</strong> &middot; Ref: {trip.id.toUpperCase()}</p>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1a56db', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Security Deposit Hold</h2>
+          <div style={{ padding: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ fontWeight: 700 }}>Temporary Bank Freeze</span>
+              <span style={{ fontSize: '16px', fontWeight: 800, color: '#2563eb' }}>ETB {securityHold.toLocaleString()}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: '9px', color: '#1e40af' }}>
+              This amount is frozen in the renter's account as a behavioral safety deposit. No money leaves the bank. Released automatically upon safe vehicle return.
+            </p>
           </div>
         </div>
 
@@ -218,9 +259,142 @@ export const Dashboard = () => {
     );
   }
 
+  function CorporatePDFTemplate({ booking }: { booking: CorporateBookingRequest }) {
+    const days = booking.startDate && booking.endDate
+      ? Math.ceil((new Date(booking.endDate).getTime() - new Date(booking.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+      : 0;
+    const insuranceAmount = booking.insuranceAmount || days * 100;
+    const securityHold = 30000;
+    const totalPaid = (booking.totalAmount || 0) + insuranceAmount;
+    return (
+      <div style={{
+        width: '210mm', minHeight: '297mm', padding: '15mm 20mm',
+        fontFamily: 'Arial, sans-serif', color: '#000', background: '#fff',
+        fontSize: '11px', lineHeight: 1.5
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', borderBottom: '3px solid #1e3a5f', paddingBottom: '15px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <div style={{ width: '50px', height: '50px', borderRadius: '8px', background: '#1e3a5f', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '20px', fontWeight: 800 }}>C</div>
+            <div>
+              <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 800, color: '#1e3a5f' }}>{booking.companyName}</h1>
+              <p style={{ margin: 0, fontSize: '9px', color: '#666', letterSpacing: '2px' }}>CORPORATE RENTAL RECEIPT</p>
+            </div>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <p style={{ margin: 0, fontSize: '9px', fontWeight: 700, color: '#666' }}>REF #</p>
+            <p style={{ margin: 0, fontWeight: 700 }}>{booking.id.toUpperCase()}</p>
+            <p style={{ margin: '2px 0 0', fontSize: '9px', color: '#999' }}>{new Date(booking.createdAt).toLocaleDateString()}</p>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Company Information</h2>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700, width: '40%' }}>Company</td><td style={{ padding: '4px 8px' }}>{booking.companyName}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Department</td><td style={{ padding: '4px 8px' }}>{booking.bookingDepartment}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Position</td><td style={{ padding: '4px 8px' }}>{booking.registrantPosition}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Email</td><td style={{ padding: '4px 8px' }}>{booking.companyEmail}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Phone</td><td style={{ padding: '4px 8px' }}>{booking.companyPhone}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Driver Information</h2>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700, width: '40%' }}>Full Name</td><td style={{ padding: '4px 8px' }}>{booking.renterFullName}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Age</td><td style={{ padding: '4px 8px' }}>{booking.renterAge}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Address</td><td style={{ padding: '4px 8px' }}>{booking.renterAddress}</td></tr>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Phone</td><td style={{ padding: '4px 8px' }}>{booking.renterPhone}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Vehicle & Rental Period</h2>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <tbody>
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700, width: '40%' }}>Vehicle</td><td style={{ padding: '4px 8px' }}>{booking.carMake} {booking.carModel} &middot; {booking.carPlate}</td></tr>
+              {booking.startDate && (
+                <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Start Date</td><td style={{ padding: '4px 8px' }}>{new Date(booking.startDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+              )}
+              {booking.endDate && (
+                <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>End Date</td><td style={{ padding: '4px 8px' }}>{new Date(booking.endDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</td></tr>
+              )}
+              <tr><td style={{ padding: '4px 8px', background: '#f3f4f6', fontWeight: 700 }}>Duration</td><td style={{ padding: '4px 8px' }}>{days} {days === 1 ? 'day' : 'days'}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Payment Receipt</h2>
+          <div style={{ padding: '12px', background: '#fefce8', border: '1px solid #fde68a', borderRadius: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+              <span style={{ fontWeight: 700, fontSize: '11px' }}>Rental Fee ({days} {days === 1 ? 'day' : 'days'})</span>
+              <span style={{ fontWeight: 700, fontSize: '11px' }}>ETB {(booking.totalAmount || 0).toLocaleString()}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ fontSize: '10px', color: '#666' }}>Daily Insurance (100 ETB × {days} {days === 1 ? 'day' : 'days'})</span>
+              <span style={{ fontSize: '10px', color: '#666' }}>ETB {insuranceAmount.toLocaleString()}</span>
+            </div>
+            <div style={{ borderTop: '1px solid #fde68a', margin: '4px 0', paddingTop: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 700 }}>Total Paid</span>
+              <span style={{ fontSize: '18px', fontWeight: 800, color: '#ca8a04' }}>ETB {totalPaid.toLocaleString()}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: '10px', color: '#a16207' }}>Payment Status: <strong>Paid</strong> &middot; Method: {(booking.paymentMethod || 'Corporate Account').toUpperCase()}</p>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: '15px' }}>
+          <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Security Deposit Hold</h2>
+          <div style={{ padding: '12px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ fontWeight: 700 }}>Temporary Bank Freeze (Corporate)</span>
+              <span style={{ fontSize: '16px', fontWeight: 800, color: '#2563eb' }}>ETB {securityHold.toLocaleString()}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: '9px', color: '#1e40af' }}>
+              This amount is frozen in the company's account as a behavioral safety deposit. Fully refundable upon safe vehicle return.
+            </p>
+          </div>
+        </div>
+
+        {booking.rentalPurpose && (
+          <div style={{ marginBottom: '15px' }}>
+            <h2 style={{ fontSize: '12px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 8px 0', textTransform: 'uppercase', letterSpacing: '1px' }}>Rental Purpose</h2>
+            <p style={{ padding: '8px 12px', background: '#f9fafb', borderRadius: '6px', fontSize: '10px', color: '#333' }}>{booking.rentalPurpose}</p>
+          </div>
+        )}
+
+        <div style={{ borderTop: '2px solid #e5e7eb', paddingTop: '14px', marginTop: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+            <div>
+              <p style={{ fontSize: '10px', fontWeight: 700, margin: '0 0 4px 0', color: '#333' }}>Authorized by:</p>
+              <p style={{ fontSize: '15px', fontWeight: 800, margin: 0 }}>{booking.companyName}</p>
+              <p style={{ fontSize: '9px', color: '#666', margin: '4px 0 0 0' }}>{booking.registrantPosition} &middot; {booking.companyEmail}</p>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ width: '100px', height: '40px', border: '1px dashed #999', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 'auto' }}>
+                <span style={{ fontSize: '8px', color: '#999' }}>Company Seal</span>
+              </div>
+              <p style={{ fontSize: '9px', color: '#666', margin: '2px 0 0 0' }}>Authorized Signature</p>
+            </div>
+          </div>
+          <p style={{ fontSize: '8px', color: '#9ca3af', textAlign: 'center', marginTop: '16px' }}>
+            {booking.companyName} &middot; Corporate Rental Agreement &middot; Powered by Zoe Car Rental
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const handleExportPDF = async (trip: Booking) => {
     setIsExportingPdf(true);
     const car = MOCK_CARS.find(c => c.id === trip.carId);
+    const days = Math.ceil((new Date(trip.endDate).getTime() - new Date(trip.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    const insuranceAmount = days * 100;
+    const securityHold = 10000;
     try {
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pw = pdf.internal.pageSize.getWidth();
@@ -312,6 +486,7 @@ export const Dashboard = () => {
       section('RENTAL PERIOD');
       row('Start', new Date(trip.startDate).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }));
       row('End', new Date(trip.endDate).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }));
+      row('Duration', `${days} ${days === 1 ? 'day' : 'days'}`);
       gap(4);
 
       // Terms
@@ -336,23 +511,58 @@ export const Dashboard = () => {
       pdf.text(`Verified on ${new Date().toLocaleString()}  \u00b7  IP verified  \u00b7  ID confirmed`, m, y);
       gap(6);
 
-      // Payment
+      // Payment Receipt
       section('PAYMENT RECEIPT');
       y += 2;
+      const payBoxH = 28;
       pdf.setFillColor(254, 252, 232);
       pdf.setDrawColor(253, 230, 138);
-      pdf.roundedRect(m, y - 3, cw, 14, 2, 2, 'FD');
+      pdf.roundedRect(m, y - 3, cw, payBoxH, 2, 2, 'FD');
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(80);
+      pdf.text(`Rental Fee (${days} ${days === 1 ? 'day' : 'days'})`, m + 3, y + 2);
+      pdf.text(`ETB ${(trip.totalAmount - insuranceAmount).toLocaleString()}`, pw - m - 3, y + 2, { align: 'right' });
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(100);
+      pdf.text(`Daily Insurance (100 ETB x ${days} ${days === 1 ? 'day' : 'days'})`, m + 3, y + 7);
+      pdf.text(`ETB ${insuranceAmount.toLocaleString()}`, pw - m - 3, y + 7, { align: 'right' });
+      pdf.setDrawColor(253, 230, 138);
+      pdf.setLineWidth(0.3);
+      pdf.line(m + 3, y + 10, pw - m - 3, y + 10);
+      pdf.setFontSize(12);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(202, 138, 4);
+      pdf.text('Total Paid', m + 3, y + 16);
+      pdf.text(`ETB ${trip.totalAmount.toLocaleString()}`, pw - m - 3, y + 16, { align: 'right' });
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(161, 98, 7);
+      pdf.text(`Paid  \u00b7  Ref: ${trip.id.toUpperCase()}`, m + 3, y + 21);
+      y += payBoxH + 4;
+
+      // Security Deposit
+      section('SECURITY DEPOSIT HOLD');
+      y += 2;
+      const secH = 18;
+      pdf.setFillColor(239, 246, 255);
+      pdf.setDrawColor(191, 219, 254);
+      pdf.roundedRect(m, y - 3, cw, secH, 2, 2, 'FD');
       pdf.setFontSize(9);
       pdf.setFont('helvetica', 'bold');
-      pdf.setTextColor(0);
-      pdf.text('Total Amount', m + 3, y + 1);
-      pdf.setFontSize(14);
-      pdf.setTextColor(202, 138, 4);
-      pdf.text(`ETB ${trip.totalAmount.toLocaleString()}`, pw - m - 3, y + 1, { align: 'right' });
-      pdf.setFontSize(8);
-      pdf.setTextColor(161, 98, 7);
-      pdf.text(`Paid  \u00b7  Ref: ${trip.id.toUpperCase()}`, m + 3, y + 6);
-      y += 17;
+      pdf.setTextColor(30);
+      pdf.text('Temporary Bank Freeze', m + 3, y + 1);
+      pdf.setFontSize(13);
+      pdf.setTextColor(37, 99, 235);
+      pdf.text(`ETB ${securityHold.toLocaleString()}`, pw - m - 3, y + 1, { align: 'right' });
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(30, 64, 175);
+      const holdDesc = 'Frozen in account as behavioral safety deposit. No money leaves the bank. Released upon safe vehicle return.';
+      const holdLines = pdf.splitTextToSize(holdDesc, cw - 6);
+      pdf.text(holdLines, m + 3, y + 8);
+      y += secH + 4;
 
       // Signature
       gap(8);
@@ -377,9 +587,10 @@ export const Dashboard = () => {
       pdf.text(profile?.email || '', pw - m, y, { align: 'right' });
 
       // Footer
+      const footerY = Math.max(y + 10, ph - 12);
       pdf.setFontSize(7);
       pdf.setTextColor(150);
-      pdf.text('Zoe Car Rental  \u00b7  This document is electronically generated.', pw / 2, ph - 12, { align: 'center' });
+      pdf.text('Zoe Car Rental  \u00b7  This document is electronically generated.', pw / 2, footerY, { align: 'center' });
 
       pdf.save(`ZOE_Agreement_${car?.make || 'Car'}_${car?.model || 'Unknown'}_${trip.id}.pdf`);
       toast.success('PDF exported successfully');
@@ -391,27 +602,196 @@ export const Dashboard = () => {
     }
   };
 
-  // Auto-approve rental requests after 3 seconds (testing)
-  useEffect(() => {
-    const pending = rentalRequests.find(r => r.status === 'pending');
-    if (pending && !autoApprovingId) {
-      setAutoApprovingId(pending.id);
-      const timer = setTimeout(() => {
-        const updated = rentalRequests.map(r =>
-          r.id === pending.id ? { ...r, status: 'approved' as const } : r
-        );
-        saveRentalRequests(updated);
-        setRentalRequests(updated);
-        setAutoApprovingId(null);
-        setApprovedReqId(pending.id);
-      }, 3000);
-      return () => clearTimeout(timer);
+  const handleCorporateExportPDF = async (booking: CorporateBookingRequest) => {
+    setIsExportingCorpPdf(true);
+    const days = booking.startDate && booking.endDate
+      ? Math.ceil((new Date(booking.endDate).getTime() - new Date(booking.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+      : 0;
+    const insuranceAmount = booking.insuranceAmount || days * 100;
+    const securityHold = 30000;
+    const totalPaid = (booking.totalAmount || 0) + insuranceAmount;
+    try {
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pw = pdf.internal.pageSize.getWidth();
+      const ph = pdf.internal.pageSize.getHeight();
+      const m = 16;
+      const cw = pw - 2 * m;
+      let y = m + 5;
+
+      const gap = (h: number) => { y += h; };
+      const section = (title: string, color: string) => {
+        pdf.setFontSize(10);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(30, 58, 95);
+        pdf.text(title, m, y);
+        y += 5;
+      };
+      const row = (label: string, value: string, labelW = 50) => {
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(100);
+        pdf.text(label, m, y);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(0);
+        pdf.text(value, m + labelW, y);
+        y += 4.5;
+      };
+
+      // Header
+      pdf.setFillColor(30, 58, 95);
+      pdf.roundedRect(m, y - 5, cw, 18, 3, 3, 'F');
+      pdf.setTextColor(255);
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(booking.companyName.toUpperCase(), pw / 2, y + 3, { align: 'center' });
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text('CORPORATE RENTAL RECEIPT', pw / 2, y + 10, { align: 'center' });
+      y += 22;
+
+      // Ref
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(150);
+      pdf.text(`Ref: ${booking.id.toUpperCase()}  |  Date: ${new Date(booking.createdAt).toLocaleDateString()}`, m, y);
+      y += 8;
+
+      // Company Information
+      section('COMPANY INFORMATION', '#1e3a5f');
+      row('Company:', booking.companyName);
+      row('Department:', booking.bookingDepartment);
+      row('Position:', booking.registrantPosition);
+      row('Email:', booking.companyEmail);
+      row('Phone:', booking.companyPhone);
+      gap(3);
+
+      // Driver Information
+      section('DRIVER INFORMATION', '#1e3a5f');
+      row('Full Name:', booking.renterFullName);
+      row('Age:', booking.renterAge);
+      row('Address:', booking.renterAddress);
+      row('Phone:', booking.renterPhone || 'N/A');
+      gap(3);
+
+      // Vehicle & Rental Period
+      section('VEHICLE & RENTAL PERIOD', '#1e3a5f');
+      row('Vehicle:', `${booking.carMake} ${booking.carModel} (${booking.carPlate})`);
+      if (booking.startDate) row('Start Date:', new Date(booking.startDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+      if (booking.endDate) row('End Date:', new Date(booking.endDate).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+      row('Duration:', `${days} ${days === 1 ? 'day' : 'days'}`);
+      gap(3);
+
+      // Payment Receipt
+      section('PAYMENT RECEIPT', '#ca8a04');
+      const payY = y;
+      pdf.setFillColor(254, 252, 232);
+      pdf.setDrawColor(253, 230, 138);
+      const payH = 28;
+      pdf.roundedRect(m, payY, cw, payH, 2, 2, 'FD');
+      y = payY + 6;
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(0);
+      pdf.text(`Rental Fee (${days} ${days === 1 ? 'day' : 'days'})`, m + 3, y);
+      pdf.text(`ETB ${(booking.totalAmount || 0).toLocaleString()}`, pw - m - 3, y, { align: 'right' });
+      y += 5;
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(100);
+      pdf.text(`Daily Insurance (100 ETB x ${days})`, m + 3, y);
+      pdf.text(`ETB ${insuranceAmount.toLocaleString()}`, pw - m - 3, y, { align: 'right' });
+      y += 7;
+      pdf.setDrawColor(253, 230, 138);
+      pdf.line(m + 3, y, pw - m - 3, y);
+      y += 4;
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(11);
+      pdf.setTextColor(0);
+      pdf.text('Total Paid', m + 3, y);
+      pdf.setFontSize(16);
+      pdf.setTextColor(202, 138, 4);
+      pdf.text(`ETB ${totalPaid.toLocaleString()}`, pw - m - 3, y, { align: 'right' });
+      y = payY + payH + 2;
+      pdf.setFontSize(8);
+      pdf.setTextColor(161, 98, 7);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(`Payment Status: Paid  |  Method: ${(booking.paymentMethod || 'Corporate Account').toUpperCase()}`, m + 3, y + 4);
+      y += 10;
+
+      // Security Deposit
+      section('SECURITY DEPOSIT HOLD', '#2563eb');
+      const secY = y;
+      pdf.setFillColor(239, 246, 255);
+      pdf.setDrawColor(191, 219, 254);
+      const secH = 16;
+      pdf.roundedRect(m, secY, cw, secH, 2, 2, 'FD');
+      pdf.setFontSize(9);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(30);
+      pdf.text('Temporary Bank Freeze (Corporate)', m + 3, secY + 5);
+      pdf.setFontSize(13);
+      pdf.setTextColor(37, 99, 235);
+      pdf.text(`ETB ${securityHold.toLocaleString()}`, pw - m - 3, secY + 5, { align: 'right' });
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(30, 64, 175);
+      pdf.text('Frozen in the company account as behavioral safety deposit. Fully refundable upon safe vehicle return.', m + 3, secY + 11);
+      y = secY + secH + 6;
+
+      // Rental Purpose
+      if (booking.rentalPurpose) {
+        section('RENTAL PURPOSE', '#1e3a5f');
+        pdf.setFontSize(9);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(50);
+        const purposeLines = pdf.splitTextToSize(booking.rentalPurpose, cw);
+        pdf.text(purposeLines, m, y);
+        y += purposeLines.length * 4 + 4;
+      }
+
+      // Footer
+      const footerY = Math.max(y + 10, ph - 14);
+      pdf.setDrawColor(200);
+      pdf.line(m, footerY - 4, pw - m, footerY - 4);
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(150);
+      pdf.text(`${booking.companyName}  \u00b7  Corporate Rental Agreement  \u00b7  Powered by Zoe Car Rental`, pw / 2, footerY, { align: 'center' });
+
+      pdf.save(`Corporate_Receipt_${booking.companyName.replace(/\s+/g, '_')}_${booking.carMake}_${booking.carModel}.pdf`);
+      toast.success('Corporate receipt exported successfully');
+    } catch (error) {
+      console.error('Corporate PDF export error:', error);
+      toast.error('Failed to export corporate receipt');
+    } finally {
+      setIsExportingCorpPdf(false);
     }
-  }, [rentalRequests, autoApprovingId]);
+  };
+
+  // Check for expired bookings every 10s
+  useEffect(() => {
+    const check = setInterval(() => {
+      const requests = getBookingRequests();
+      let changed = false;
+      const updated = requests.map(r => {
+        if (r.status === 'host_accepted' && isBookingExpired(r)) {
+          changed = true;
+          return { ...r, status: 'expired' as const };
+        }
+        return r;
+      });
+      if (changed) {
+        saveBookingRequests(updated);
+        setRentalRequests(updated);
+      }
+    }, 10000);
+    return () => clearInterval(check);
+  }, []);
 
   const sidebarItems = [
     { id: 'overview', label: t('dashboard.overview'), icon: LayoutDashboard },
     { id: 'requests', label: t('dashboard.myRequests'), icon: FileText },
+    ...(profile?.role === 'corporate_renter' ? [{ id: 'company', label: 'Company', icon: Building2 }] : []),
     { id: 'trips', label: t('dashboard.myTrips'), icon: CalendarIcon },
     { id: 'favorites', label: t('dashboard.favorites'), icon: Heart },
     { id: 'payments', label: t('dashboard.payments'), icon: CreditCard },
@@ -423,9 +803,11 @@ export const Dashboard = () => {
       <div className="h-full bg-gradient-to-b from-[#0a1628] via-[#0f1f3d] to-[#162a4a] flex flex-col border-r border-blue-900/30">
         <div className="p-6 border-b border-blue-900/30">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white shadow-lg shrink-0">
-              <CarIcon size={22} />
-            </div>
+            <img 
+              src="/images/zoelogo.png" 
+              alt="Zoe Car Rental"
+              className="h-10 w-auto shrink-0"
+            />
             {sidebarOpen && (
               <div>
                 <h2 className="text-white font-extrabold tracking-tight">Zoe Rental</h2>
@@ -540,7 +922,11 @@ export const Dashboard = () => {
                     <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">{t('dashboard.totalSpent')}</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <CardDescription className="text-2xl font-extrabold text-white">ETB 0</CardDescription>
+                    <CardDescription className="text-2xl font-extrabold text-white">
+                      ETB {profile?.role === 'corporate_renter'
+                        ? corporateBookings.filter(b => b.status === 'payment_completed').reduce((s, b) => s + (b.totalAmount || 0) + (b.insuranceAmount || 0), 0).toLocaleString()
+                        : '0'}
+                    </CardDescription>
                   </CardContent>
                 </Card>
                 <Card className="bg-[#0f1f3d] border-blue-900/30">
@@ -548,7 +934,11 @@ export const Dashboard = () => {
                     <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">{t('dashboard.trips')}</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <CardDescription className="text-2xl font-extrabold text-white">{bookings.length}</CardDescription>
+                    <CardDescription className="text-2xl font-extrabold text-white">
+                      {profile?.role === 'corporate_renter'
+                        ? corporateBookings.filter(b => b.status === 'payment_completed').length
+                        : bookings.length}
+                    </CardDescription>
                   </CardContent>
                 </Card>
                 <Card className="bg-[#0f1f3d] border-blue-900/30">
@@ -570,9 +960,9 @@ export const Dashboard = () => {
                     <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">{t('dashboard.quickAction')}</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <Button onClick={() => navigate('/vehicles')}
+                    <Button onClick={() => profile?.role === 'corporate_renter' ? setActivePage('company') : navigate('/vehicles')}
                       className="w-full rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 font-bold text-xs">
-                      {t('dashboard.browseFleet')}
+                      {profile?.role === 'corporate_renter' ? 'Company Dashboard' : t('dashboard.browseFleet')}
                     </Button>
                   </CardContent>
                 </Card>
@@ -590,6 +980,14 @@ export const Dashboard = () => {
                       <div className="flex items-center gap-3"><CarIcon size={20} /><span className="font-bold">{t('dashboard.browseFleet')}</span></div>
                       <ChevronRight size={18} className="transition-transform group-hover:translate-x-1" />
                     </Button>
+                    {profile?.role === 'corporate_renter' && (
+                      <Button variant="ghost"
+                        className="w-full justify-between rounded-xl h-12 hover:bg-blue-500/10 hover:text-blue-400 text-blue-300 group"
+                        onClick={() => setActivePage('company')}>
+                        <div className="flex items-center gap-3"><Building2 size={20} /><span className="font-bold">Company Dashboard</span></div>
+                        <ChevronRight size={18} className="transition-transform group-hover:translate-x-1" />
+                      </Button>
+                    )}
                     {profile?.verificationStatus !== 'verified' && (
                       <Button variant="ghost"
                         className="w-full justify-between rounded-xl h-12 hover:bg-blue-500/10 hover:text-blue-400 text-blue-300 group"
@@ -679,37 +1077,48 @@ export const Dashboard = () => {
                         setIsSubmittingRequest(true);
                         const car = hostFleet.find(c => c.id === selectedCarId);
                         if (!car) return;
+                        const days = 3;
+                        const insuranceAmount = days * 100;
                         const newReq: RentalRequest = {
-                          id: 'req-' + Date.now(),
+                          id: 'v2-req-' + Date.now(),
                           renterName: profile?.name || 'Unknown',
                           renterPhone: profile?.phoneNumber || '+251XXXXXXXXX',
                           renterEmail: profile?.email || 'unknown@email.com',
                           renterPhoto: profile?.profilePic || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150',
                           renterAddress: 'Addis Ababa',
+                          age: '',
+                          familyNumber: '',
+                          relation: '',
+                          familyName: '',
+                          purpose: requestNotes,
                           nationalId: profile?.nationalId || 'FD-XXXX-XXXX',
-                          nationalIdPhoto: profile?.verificationData?.idFront || 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+                          nationalIdPhotoFront: profile?.verificationData?.idFront || '',
+                          nationalIdPhotoBack: '',
                           driverLicense: profile?.verificationData?.idNumber || 'DL-ETH-XXXXX',
-                          driverLicensePhoto: profile?.verificationData?.licenseFront || 'https://images.unsplash.com/photo-1604220131005-05f3c0e0a6c5?auto=format&fit=crop&q=80&w=400',
+                          driverLicensePhotoFront: profile?.verificationData?.licenseFront || '',
+                          driverLicensePhotoBack: '',
                           carId: car.id,
                           carMake: car.make,
                           carModel: car.model,
                           carPlate: car.plateNumber,
                           carImage: car.images[0] || '',
                           startDate: new Date().toISOString(),
-                          endDate: new Date(Date.now() + 3*24*60*60*1000).toISOString(),
-                          totalAmount: car.pricePerDay * 3,
+                          endDate: new Date(Date.now() + days*24*60*60*1000).toISOString(),
+                          totalAmount: car.pricePerDay * days,
+                          paymentMethod: 'telebirr',
                           notes: requestNotes,
                           status: 'pending',
                           createdAt: new Date().toISOString(),
+                          insuranceAmount,
                         };
                         const all = [...rentalRequests, newReq];
-                        saveRentalRequests(all);
+                        saveBookingRequests(all);
                         setRentalRequests(all);
                         setIsSubmittingRequest(false);
                         setShowRequestForm(false);
                         setSelectedCarId('');
                         setRequestNotes('');
-                        toast.success('Request submitted! Auto-approving in 3 seconds...');
+                        toast.success('Request submitted! Awaiting host review...');
                       }}
                       disabled={isSubmittingRequest}
                       className="w-full h-12 bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-bold rounded-xl gap-2"
@@ -736,10 +1145,14 @@ export const Dashboard = () => {
                 ) : (
                   rentalRequests.map(req => {
                     const isPending = req.status === 'pending';
-                    const isApproved = req.status === 'approved';
+                    const isHostAccepted = req.status === 'host_accepted';
+                    const isBankHoldActive = req.status === 'bank_hold_active';
+                    const isPaymentCompleted = req.status === 'payment_completed';
                     const isDeclined = req.status === 'rejected';
-                    const isAutoApproving = isPending && autoApprovingId === req.id;
-                    const justApproved = approvedReqId === req.id;
+                    const isExpired = req.status === 'expired';
+                    const insurance = (req.insuranceAmount ?? 0);
+                    const finalAmt = req.totalAmount + insurance;
+                    const days = Math.ceil((new Date(req.endDate).getTime() - new Date(req.startDate).getTime()) / (1000*60*60*24)) + 1;
                     return (
                       <Card key={req.id} className="bg-[#0f1f3d] border-blue-900/30 overflow-hidden">
                           <div className="flex flex-col sm:flex-row">
@@ -758,21 +1171,34 @@ export const Dashboard = () => {
                                 </div>
                               </div>
                               <div className="flex flex-col items-end gap-2 shrink-0">
-                                {isAutoApproving ? (
-                                  <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 animate-pulse">
-                                    <Loader2 size={12} className="mr-1 animate-spin" /> Auto-approving...
-                                  </Badge>
-                                ) : isPending ? (
+                                {isPending && (
                                   <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-                                    <Clock size={12} className="mr-1" /> {t('dashboard.pendingApproval')}
+                                    <Clock size={12} className="mr-1" /> Pending
                                   </Badge>
-                                ) : isApproved ? (
+                                )}
+                                {isHostAccepted && (
+                                  <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">
+                                    <CheckCircle2 size={12} className="mr-1" /> Host Accepted
+                                  </Badge>
+                                )}
+                                {isBankHoldActive && (
+                                  <Badge className="bg-indigo-500/20 text-indigo-400 border-indigo-500/30">
+                                    <ShieldCheck size={12} className="mr-1" /> Hold Active
+                                  </Badge>
+                                )}
+                                {isPaymentCompleted && (
                                   <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-                                    <CheckCircle2 size={12} className="mr-1" /> {t('dashboard.approved')}
+                                    <CheckCircle2 size={12} className="mr-1" /> Officially Booked
                                   </Badge>
-                                ) : (
+                                )}
+                                {isDeclined && (
                                   <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
-                                    <XCircle size={12} className="mr-1" /> {t('dashboard.declined')}
+                                    <XCircle size={12} className="mr-1" /> Declined
+                                  </Badge>
+                                )}
+                                {isExpired && (
+                                  <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/30">
+                                    <Clock size={12} className="mr-1" /> Expired
                                   </Badge>
                                 )}
                               </div>
@@ -781,7 +1207,38 @@ export const Dashboard = () => {
                               <p className="text-blue-200 text-sm mt-2 italic">"{req.notes}"</p>
                             )}
                             <div className="flex items-center gap-3 mt-4">
-                              {isApproved && (
+                              {isHostAccepted && (
+                                <Button
+                                  onClick={async () => {
+                                    setBankHoldingId(req.id);
+                                    try {
+                                      const result = await simulateBankHold(10000);
+                                      if (result.status === 'HOLD_SUCCESS') {
+                                        const requests = getBookingRequests();
+                                        const idx = requests.findIndex(r => r.id === req.id);
+                                        if (idx !== -1) {
+                                          requests[idx].status = 'bank_hold_active';
+                                          requests[idx].bankHoldApprovedAt = new Date().toISOString();
+                                          requests[idx].insuranceAmount = days * 100;
+                                          saveBookingRequests(requests);
+                                          setRentalRequests([...requests]);
+                                        }
+                                        toast.success('10,000 ETB security hold approved!');
+                                      }
+                                    } catch {
+                                      toast.error('Bank hold failed. Please try again.');
+                                    } finally {
+                                      setBankHoldingId(null);
+                                    }
+                                  }}
+                                  disabled={bankHoldingId === req.id}
+                                  className="bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-bold rounded-xl gap-2"
+                                >
+                                  {bankHoldingId === req.id ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                                  {bankHoldingId === req.id ? 'Approving Hold...' : 'Approve 10,000 ETB Hold'}
+                                </Button>
+                              )}
+                              {isBankHoldActive && (
                                 <Button
                                   onClick={() => {
                                     navigate(`/rental-agreement`, {
@@ -792,21 +1249,30 @@ export const Dashboard = () => {
                                         carPlate: req.carPlate,
                                         startDate: req.startDate,
                                         endDate: req.endDate,
-                                        totalAmount: req.totalAmount,
+                                        totalAmount: finalAmt,
                                         paymentMethod: 'telebirr',
+                                        insuranceAmount: insurance,
                                       }
                                     });
                                   }}
                                   className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-xl gap-2"
                                 >
-                                  <CreditCard size={16} /> {t('dashboard.proceedToPayment')}
+                                  <CreditCard size={16} /> Pay ETB {finalAmt.toLocaleString()}
                                 </Button>
                               )}
                               {isPending && (
-                                <p className="text-xs text-blue-400">{t('dashboard.awaitingReview')}</p>
+                                <p className="text-xs text-blue-400">Awaiting host review...</p>
+                              )}
+                              {isPaymentCompleted && (
+                                <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs py-1.5 px-3">
+                                  <CheckCircle2 size={12} className="mr-1" /> Booking Confirmed
+                                </Badge>
                               )}
                               {isDeclined && (
-                                <p className="text-xs text-red-400">{t('dashboard.requestDeclined')}</p>
+                                <p className="text-xs text-red-400">Request was declined</p>
+                              )}
+                              {isExpired && (
+                                <p className="text-xs text-gray-400">Booking expired (15-min window passed)</p>
                               )}
                             </div>
                           </div>
@@ -846,7 +1312,7 @@ export const Dashboard = () => {
                             <div className="flex items-start justify-between mb-3">
                               <div>
                                 <h3 className="text-lg font-bold text-white">{car?.make} {car?.model}</h3>
-                                <p className="text-xs text-blue-300">{car?.year} • {car?.type}</p>
+                                <p className="text-xs text-blue-300">{car?.year} &middot; {car?.type}</p>
                               </div>
                               <Badge className={cn(
                                 trip.status === 'confirmed' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
@@ -886,8 +1352,77 @@ export const Dashboard = () => {
                       </motion.div>
                     );
                   })}
+                  {/* Completed Corporate Bookings as Trips */}
+                  {corporateBookings.filter(b => b.status === 'payment_completed').map((booking, index) => {
+                    const days = booking.startDate && booking.endDate
+                      ? Math.ceil((new Date(booking.endDate).getTime() - new Date(booking.startDate).getTime()) / (1000 * 60 * 60 * 24)) + 1
+                      : 0;
+                    return (
+                      <motion.div key={booking.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, delay: (sampleTrips.length + index) * 0.1 }}>
+                        <Card className="bg-[#0f1f3d] border-emerald-900/30 overflow-hidden group hover:border-emerald-500/50 transition-all h-full">
+                          <div className="h-44 overflow-hidden relative">
+                            <img src={booking.carImage} alt={booking.carModel}
+                              className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                            <div className="absolute top-2 left-2">
+                              <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-[10px]">
+                                <Building2 size={10} className="mr-1" /> Corporate
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="p-5">
+                            <div className="flex items-start justify-between mb-3">
+                              <div>
+                                <h3 className="text-lg font-bold text-white">{booking.carMake} {booking.carModel}</h3>
+                                <p className="text-xs text-blue-300">{booking.companyName} &middot; {booking.renterFullName}</p>
+                              </div>
+                              <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                                <CheckCircle2 size={12} className="mr-1" /> Completed
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-blue-200 mb-2">
+                              <CalendarIcon size={13} className="text-blue-400 shrink-0" />
+                              <span>
+                                {booking.startDate ? format(new Date(booking.startDate), 'MMM d') : 'N/A'}
+                                {booking.endDate ? ` - ${format(new Date(booking.endDate), 'MMM d, yyyy')}` : ''}
+                              </span>
+                              {days > 0 && <span className="text-blue-500">&middot; {days} {days === 1 ? 'day' : 'days'}</span>}
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-lg font-extrabold text-emerald-400">
+                                ETB {((booking.totalAmount || 0) + (booking.insuranceAmount || 0)).toLocaleString()}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <button onClick={() => { setCorpPdfPreview(booking); setShowCorpPdfPreview(true); }}
+                                  className="text-indigo-400 hover:text-indigo-300 text-[10px] font-bold flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-indigo-500/10 transition-all">
+                                  <FileText size={11} /> Preview
+                                </button>
+                                <button onClick={() => handleCorporateExportPDF(booking)} disabled={isExportingCorpPdf}
+                                  className="text-purple-400 hover:text-purple-300 text-[10px] font-bold flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-purple-500/10 transition-all disabled:opacity-50">
+                                  {isExportingCorpPdf ? <Loader2 size={11} className="animate-spin" /> : <Download size={11} />} Receipt
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </Card>
+                      </motion.div>
+                    );
+                  })}
                 </AnimatePresence>
               </div>
+              {sampleTrips.length === 0 && corporateBookings.filter(b => b.status === 'payment_completed').length === 0 && (
+                <div className="flex h-48 flex-col items-center justify-center gap-4 rounded-3xl border-2 border-dashed border-blue-900/30 text-center">
+                  <div className="rounded-full bg-blue-500/10 p-4 text-blue-400">
+                    <CalendarIcon size={40} />
+                  </div>
+                  <div>
+                    <p className="text-xl font-bold text-white">No trips yet</p>
+                    <p className="text-sm text-blue-300">Book a vehicle to see your trips here.</p>
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -943,6 +1478,262 @@ export const Dashboard = () => {
                     </motion.div>
                   );
                 })}
+              </div>
+            </motion.div>
+          )}
+
+          {/* Company Page (corporate_renter only) */}
+          {activePage === 'company' && (
+            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <h1 className="text-xl sm:text-2xl font-extrabold text-white flex items-center gap-3">
+                  <Building2 size={28} className="text-blue-400" /> Company
+                </h1>
+              </div>
+
+              {corpProfile ? (
+                <Card className="bg-[#0f1f3d] border-blue-900/30">
+                  <CardHeader>
+                    <CardTitle className="text-white font-bold flex items-center gap-2"><Building2 size={20} /> Corporate Profile</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-[#0a1628] rounded-xl p-4">
+                        <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Company Name</p>
+                        <p className="text-white font-bold text-lg mt-1">{corpProfile.companyName}</p>
+                      </div>
+                      <div className="bg-[#0a1628] rounded-xl p-4">
+                        <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Position</p>
+                        <p className="text-white font-bold mt-1">{corpProfile.registrantPosition}</p>
+                      </div>
+                      <div className="bg-[#0a1628] rounded-xl p-4">
+                        <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Email</p>
+                        <p className="text-white mt-1">{corpProfile.companyEmail}</p>
+                      </div>
+                      <div className="bg-[#0a1628] rounded-xl p-4">
+                        <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Phone</p>
+                        <p className="text-white mt-1">{corpProfile.companyPhone}</p>
+                      </div>
+                      <div className="bg-[#0a1628] rounded-xl p-4 md:col-span-2">
+                        <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Address</p>
+                        <p className="text-white mt-1">{corpProfile.companyAddress}</p>
+                      </div>
+                    </div>
+                    <div className="bg-[#0a1628] rounded-xl p-4">
+                      <p className="text-[10px] text-blue-500 font-bold uppercase tracking-widest">Renter Name</p>
+                      <p className="text-white font-bold mt-1">{corpProfile.renterFullName}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="bg-[#0f1f3d] border-blue-900/30">
+                  <CardContent className="p-6 text-center">
+                    <Building2 size={40} className="text-blue-400 mx-auto mb-3" />
+                    <p className="text-white font-bold">No corporate profile found</p>
+                    <p className="text-sm text-blue-300 mt-1">Complete your corporate registration to get started.</p>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Corporate Stats */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                <Card className="bg-[#0f1f3d] border-blue-900/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">
+                      <CarIcon size={14} className="inline mr-1" /> Fleet Cars
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <CardDescription className="text-2xl font-extrabold text-white">{hostFleet.length}</CardDescription>
+                  </CardContent>
+                </Card>
+                <Card className="bg-[#0f1f3d] border-blue-900/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">
+                      <Clock size={14} className="inline mr-1" /> Active Bookings
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <CardDescription className="text-2xl font-extrabold text-white">
+                      {corporateBookings.filter(b => b.status === 'payment_completed' || b.status === 'bank_hold_active').length}
+                    </CardDescription>
+                  </CardContent>
+                </Card>
+                <Card className="bg-[#0f1f3d] border-blue-900/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">
+                      <Loader2 size={14} className="inline mr-1" /> Pending
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <CardDescription className="text-2xl font-extrabold text-yellow-400">
+                      {corporateBookings.filter(b => b.status === 'pending_approval' || b.status === 'host_accepted').length}
+                    </CardDescription>
+                  </CardContent>
+                </Card>
+                <Card className="bg-[#0f1f3d] border-blue-900/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-xs font-bold uppercase tracking-widest text-blue-300">
+                      <CheckCircle2 size={14} className="inline mr-1" /> Completed
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <CardDescription className="text-2xl font-extrabold text-green-400">
+                      {corporateBookings.filter(b => b.status === 'payment_completed').length}
+                    </CardDescription>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Available Fleet */}
+              <Card className="bg-[#0f1f3d] border-blue-900/30">
+                <CardHeader>
+                  <CardTitle className="text-white font-bold flex items-center gap-2">
+                    <CarIcon size={20} className="text-blue-400" /> Available Fleet
+                  </CardTitle>
+                  <CardDescription className="text-blue-300 text-sm">Browse vehicles available for corporate booking</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {hostFleet.slice(0, 6).map(car => (
+                      <div key={car.id} className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30 hover:border-blue-500/50 transition-all group">
+                        <div className="h-36 overflow-hidden">
+                          <img src={car.images?.[0] || ''} alt={car.model} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                        </div>
+                        <div className="p-4">
+                          <h3 className="text-white font-bold text-sm">{car.make} {car.model}</h3>
+                          <p className="text-xs text-blue-300 mt-0.5">{car.year} &middot; {car.transmission} &middot; {car.fuelType}</p>
+                          <div className="flex items-center justify-between mt-3">
+                            <span className="text-blue-400 font-bold text-sm">ETB {car.pricePerDay.toLocaleString()}<span className="text-xs text-blue-500">/day</span></span>
+                            <Button size="sm" onClick={() => navigate(`/cars/${car.id}`)} className="rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 font-bold text-xs h-8">Book Now</Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {hostFleet.length > 6 && (
+                    <Button onClick={() => navigate('/vehicles')} variant="ghost" className="w-full mt-4 text-blue-400 hover:text-blue-300 font-bold text-sm">
+                      View All {hostFleet.length} Vehicles <ChevronRight size={16} className="ml-1" />
+                    </Button>
+                  )}
+                  {hostFleet.length === 0 && (
+                    <div className="flex h-24 items-center justify-center rounded-xl bg-[#0a1628] border border-dashed border-blue-900/30">
+                      <p className="text-sm text-blue-300">No fleet data available</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Corporate Booking Requests */}
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <h2 className="text-lg font-bold text-white">Corporate Booking Requests</h2>
+                  {corporateBookings.length > 0 && (
+                    <Badge className="bg-indigo-500/20 text-indigo-400 border-indigo-500/30">{corporateBookings.length} total</Badge>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  {corporateBookings.length === 0 ? (
+                    <div className="flex h-32 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-blue-900/30 text-center">
+                      <div className="rounded-full bg-blue-500/10 p-3 text-blue-400">
+                        <Building2 size={28} />
+                      </div>
+                      <p className="text-sm font-bold text-white">No corporate bookings yet</p>
+                      <p className="text-xs text-blue-300">Browse vehicles and submit a corporate booking request.</p>
+                    </div>
+                  ) : (
+                    corporateBookings.map(req => {
+                      const isPending = req.status === 'pending_approval';
+                      const isAccepted = req.status === 'host_accepted';
+                      const isBankHoldActive = req.status === 'bank_hold_active';
+                      const isPaymentCompleted = req.status === 'payment_completed';
+                      const isRejected = req.status === 'rejected';
+                      return (
+                        <Card key={req.id} className="bg-[#0f1f3d] border-blue-900/30 overflow-hidden">
+                          <div className="p-4 flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                              <div className="h-14 w-20 rounded-xl overflow-hidden shrink-0">
+                                <img src={req.carImage} alt={req.carModel} className="h-full w-full object-cover" />
+                              </div>
+                              <div>
+                                <h3 className="text-white font-bold text-sm">{req.carMake} {req.carModel}</h3>
+                                <p className="text-blue-300 text-xs">{req.companyName} &middot; {req.renterFullName}</p>
+                                <p className="text-blue-400 text-xs mt-0.5">{new Date(req.createdAt).toLocaleDateString()}</p>
+                                {isAccepted && (
+                                  <p className="text-yellow-400 text-xs mt-1 font-bold">
+                                    <Lock size={10} className="inline mr-1" />30,000 ETB hold required
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1.5">
+                              {isPending && (
+                                <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
+                                  <Loader2 size={12} className="mr-1 animate-spin" /> Pending
+                                </Badge>
+                              )}
+                              {isAccepted && (
+                                <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">
+                                  <CheckCircle2 size={12} className="mr-1" /> Host Approved
+                                </Badge>
+                              )}
+                              {isBankHoldActive && (
+                                <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
+                                  <Lock size={12} className="mr-1" /> Hold Active
+                                </Badge>
+                              )}
+                              {isPaymentCompleted && (
+                                <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                                  <CheckCircle2 size={12} className="mr-1" /> Confirmed
+                                </Badge>
+                              )}
+                              {isRejected && (
+                                <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
+                                  <XCircle size={12} className="mr-1" /> Declined
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          {isAccepted && (
+                            <div className="px-4 pb-4 border-t border-blue-900/30 pt-3">
+                              <Button
+                                onClick={async () => {
+                                  setCorpBankHoldingId(req.id);
+                                  try {
+                                    if (!req.bankHoldApprovedAt) {
+                                      const result = await simulateBankHold(30000);
+                                      if (result.status !== 'HOLD_SUCCESS') {
+                                        toast.error('Bank hold failed. Please try again.');
+                                        setCorpBankHoldingId(null);
+                                        return;
+                                      }
+                                    }
+                                    const all = await getCorporateBookingRequests();
+                                    const updated = all.map(r =>
+                                      r.id === req.id ? { ...r, status: 'bank_hold_active' as const, bankHoldApprovedAt: new Date().toISOString() } : r
+                                    );
+                                    await saveCorporateBookingRequests(updated);
+                                    setCorporateBookings(updated);
+                                    toast.success('30,000 ETB security hold approved!');
+                                  } catch {
+                                    toast.error('Bank hold failed. Please try again.');
+                                  } finally {
+                                    setCorpBankHoldingId(null);
+                                  }
+                                }}
+                                disabled={corpBankHoldingId === req.id}
+                                className="w-full h-11 bg-gradient-to-r from-yellow-500 to-amber-600 hover:from-yellow-600 hover:to-amber-700 text-white font-bold rounded-xl gap-2"
+                              >
+                                {corpBankHoldingId === req.id ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
+                                {corpBankHoldingId === req.id ? 'Processing Hold...' : 'Complete 30,000 ETB Bank Hold'}
+                              </Button>
+                            </div>
+                          )}
+                        </Card>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </motion.div>
           )}
@@ -1165,6 +1956,60 @@ export const Dashboard = () => {
             </motion.div>
           );
         })()}
+      </AnimatePresence>
+
+      {/* Corporate PDF Preview Modal */}
+      <AnimatePresence>
+        {showCorpPdfPreview && corpPdfPreview && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+            onClick={() => { setShowCorpPdfPreview(false); setCorpPdfPreview(null); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-gray-100 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto relative"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="sticky top-0 bg-white z-10 flex items-center justify-between px-6 py-4 border-b border-gray-200 rounded-t-2xl">
+                <div className="flex items-center gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600">
+                    <FileText size={18} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-gray-900">Corporate Rental Receipt</h2>
+                    <p className="text-[11px] text-gray-500">Company-standard document &middot; {corpPdfPreview?.companyName}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleCorporateExportPDF(corpPdfPreview)}
+                    disabled={isExportingCorpPdf}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-all text-sm font-bold disabled:opacity-50"
+                  >
+                    {isExportingCorpPdf ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                    {isExportingCorpPdf ? 'Exporting...' : 'Download Receipt'}
+                  </button>
+                  <button
+                    onClick={() => { setShowCorpPdfPreview(false); setCorpPdfPreview(null); }}
+                    className="p-2 rounded-lg hover:bg-gray-200 text-gray-500 transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+              <div className="flex justify-center p-6">
+                <div className="shadow-[0_8px_30px_rgb(0,0,0,0.3)] bg-white" style={{ width: '210mm', transform: 'scale(0.7)', transformOrigin: 'top center' }}>
+                  <CorporatePDFTemplate booking={corpPdfPreview} />
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );

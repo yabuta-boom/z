@@ -1,7 +1,7 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { 
-  Car as CarIcon, Plus, DollarSign, ShieldCheck, Clock, CheckCircle2,
+  Car as CarIcon, Plus, DollarSign, ShieldCheck, Clock, CheckCircle2, XCircle,
   Upload, Info, MapPin, Navigation, FileText, Cpu, LayoutDashboard,
   Search, Trash2, Edit3, X, Menu, Settings, LogOut, AlertTriangle,
   Eye, EyeOff, User, Calendar, Gauge, Fuel, Users, BadgeCheck,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../contexts/AuthContext';
+import type { CorporateBookingRequest } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -25,8 +26,9 @@ const cn = (...classes: string[]) => classes.filter(Boolean).join(" ");
 import { 
   FleetCar, getFleet, saveFleet, getApprovedFleetCars, initSampleFleet,
   ActiveRental, getActiveRentals, initSampleRentals,
-  RentalRequest, getRentalRequests, saveRentalRequests, initSampleRentalRequests,
-  ReturnRequest, getReturnRequests, saveReturnRequests, initSampleReturnRequests
+  RentalRequest, getBookingRequests, saveBookingRequests, initFreshBookingSystem,
+  ReturnRequest, getReturnRequests, saveReturnRequests, initSampleReturnRequests,
+  getCorporateBookingRequests, saveCorporateBookingRequests
 } from '../lib/fleetUtils';
 
 const carTypes = ['Sedan', 'SUV', 'Luxury', 'Economy', '4x4', 'Trucks', 'Vans', 'Motorcycles', 'Sports', 'Electric'];
@@ -64,7 +66,9 @@ export const Host = () => {
   const [returnRequests, setReturnRequests] = useState<ReturnRequest[]>([]);
   const [expandedRentalReq, setExpandedRentalReq] = useState<string | null>(null);
   const [expandedReturnReq, setExpandedReturnReq] = useState<string | null>(null);
-  const [approvalTab, setApprovalTab] = useState<'returns' | 'rentals'>('rentals');
+  const [approvalTab, setApprovalTab] = useState<'returns' | 'rentals' | 'corporate'>('rentals');
+  const [corporateBookings, setCorporateBookings] = useState<CorporateBookingRequest[]>([]);
+  const [expandedCorpBooking, setExpandedCorpBooking] = useState<string | null>(null);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
   const [previewRental, setPreviewRental] = useState<ActiveRental | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -92,10 +96,11 @@ export const Host = () => {
     setEngineStatus(eng);
     setRentalLocations(locs);
     if (rentals.length > 0) setTrackedRental(rentals[0].id);
-    initSampleRentalRequests();
-    setRentalRequests(getRentalRequests());
+    initFreshBookingSystem();
+    setRentalRequests(getBookingRequests());
     initSampleReturnRequests();
     setReturnRequests(getReturnRequests());
+    getCorporateBookingRequests().then(bookings => setCorporateBookings(bookings));
   }, [location.search]);
 
   // Get host's current location
@@ -200,11 +205,11 @@ export const Host = () => {
 
   const handleApproveRental = (id: string) => {
     const updated = rentalRequests.map(r =>
-      r.id === id ? { ...r, status: 'approved' as const } : r
+      r.id === id ? { ...r, status: 'host_accepted' as const, hostAcceptedAt: new Date().toISOString() } : r
     );
-    saveRentalRequests(updated);
+    saveBookingRequests(updated);
     setRentalRequests(updated);
-    toast.success('Rental request approved. Renter can now proceed to payment.');
+    toast.success('Rental request approved. Renter can now approve the security hold.');
     setExpandedRentalReq(null);
   };
 
@@ -212,10 +217,32 @@ export const Host = () => {
     const updated = rentalRequests.map(r =>
       r.id === id ? { ...r, status: 'rejected' as const } : r
     );
-    saveRentalRequests(updated);
+    saveBookingRequests(updated);
     setRentalRequests(updated);
     toast.success('Rental request rejected.');
     setExpandedRentalReq(null);
+  };
+
+  const handleApproveCorporate = async (id: string) => {
+    const all = await getCorporateBookingRequests();
+    const updated = all.map(r =>
+      r.id === id ? { ...r, status: 'host_accepted' as const, hostAcceptedAt: new Date().toISOString() } : r
+    );
+    await saveCorporateBookingRequests(updated);
+    setCorporateBookings(updated);
+    toast.success('Corporate booking approved! Renter can now proceed.');
+    setExpandedCorpBooking(null);
+  };
+
+  const handleRejectCorporate = async (id: string) => {
+    const all = await getCorporateBookingRequests();
+    const updated = all.map(r =>
+      r.id === id ? { ...r, status: 'rejected' as const } : r
+    );
+    await saveCorporateBookingRequests(updated);
+    setCorporateBookings(updated);
+    toast.success('Corporate booking rejected.');
+    setExpandedCorpBooking(null);
   };
 
   const handleApproveReturn = (id: string) => {
@@ -287,9 +314,11 @@ export const Host = () => {
       <div className="h-full bg-gradient-to-b from-[#0a1628] via-[#0f1f3d] to-[#162a4a] flex flex-col border-r border-blue-900/30">
         <div className="p-6 border-b border-blue-900/30">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white shadow-lg shrink-0">
-              <CarIcon size={22} />
-            </div>
+            <img 
+              src="/images/zoelogo.png" 
+              alt="Zoe Car Rental"
+              className="h-10 w-auto shrink-0"
+            />
             {sidebarOpen && (
               <div>
                 <h2 className="text-white font-extrabold tracking-tight">{t('host.hostPanel')}</h2>
@@ -890,7 +919,17 @@ export const Host = () => {
                       : 'text-blue-400 hover:text-white'
                   }`}
                 >
-                  <ShieldCheck size={16} /> Vehicle Returns
+                    <ShieldCheck size={16} /> Vehicle Returns
+                </button>
+                <button
+                  onClick={() => setApprovalTab('corporate')}
+                  className={`flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg font-bold text-xs sm:text-sm transition-all whitespace-nowrap ${
+                    approvalTab === 'corporate'
+                      ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg'
+                      : 'text-blue-400 hover:text-white'
+                  }`}
+                >
+                  <Building2 size={16} /> Corporate Bookings
                 </button>
               </div>
 
@@ -1090,22 +1129,51 @@ export const Host = () => {
                     <div className="pt-2">
                       <p className="text-xs text-blue-400 font-bold uppercase tracking-widest mb-3">History</p>
                       <div className="space-y-2">
-                        {rentalRequests.filter(r => r.status !== 'pending').map(req => (
-                          <div key={req.id} className="bg-[#0a1628] rounded-xl p-3 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className="h-8 w-8 rounded-full overflow-hidden">
-                                <img src={req.renterPhoto} alt="" className="h-full w-full object-cover" />
-                              </div>
-                              <div>
-                                <p className="text-white text-sm font-bold">{req.renterName}</p>
-                                <p className="text-blue-300 text-xs">{req.carMake} {req.carModel}</p>
-                              </div>
-                            </div>
-                            <Badge className={req.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}>
-                              {req.status === 'approved' ? 'Approved' : 'Declined'}
-                            </Badge>
+                        {rentalRequests.filter(r => r.status !== 'pending').map(req => {
+                    const isHostAccepted = req.status === 'host_accepted';
+                    const isBankHoldActive = req.status === 'bank_hold_active';
+                    const isPaymentCompleted = req.status === 'payment_completed';
+                    const isDeclined = req.status === 'rejected';
+                    const isExpiredStatus = req.status === 'expired';
+                    return (
+                      <div key={req.id} className="bg-[#0a1628] rounded-xl p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="h-8 w-8 rounded-full overflow-hidden">
+                            <img src={req.renterPhoto} alt="" className="h-full w-full object-cover" />
                           </div>
-                        ))}
+                          <div>
+                            <p className="text-white text-sm font-bold">{req.renterName}</p>
+                            <p className="text-blue-300 text-xs">{req.carMake} {req.carModel}</p>
+                          </div>
+                        </div>
+                        {isHostAccepted && (
+                          <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">
+                            <CheckCircle2 size={12} className="mr-1" /> Accepted
+                          </Badge>
+                        )}
+                        {isBankHoldActive && (
+                          <Badge className="bg-indigo-500/20 text-indigo-400 border-indigo-500/30">
+                            <ShieldCheck size={12} className="mr-1" /> Hold Active
+                          </Badge>
+                        )}
+                        {isPaymentCompleted && (
+                          <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
+                            <CheckCircle2 size={12} className="mr-1" /> Booked
+                          </Badge>
+                        )}
+                        {isDeclined && (
+                          <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
+                            <XCircle size={12} className="mr-1" /> Declined
+                          </Badge>
+                        )}
+                        {isExpiredStatus && (
+                          <Badge className="bg-gray-500/20 text-gray-400 border-gray-500/30">
+                            <Clock size={12} className="mr-1" /> Expired
+                          </Badge>
+                        )}
+                      </div>
+                    );
+                  })}
                       </div>
               </div>
               )}
@@ -1122,7 +1190,219 @@ export const Host = () => {
                     <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">
                       {returnRequests.filter(r => r.status === 'pending').length} pending
                     </Badge>
+              )}
+                {/* ——— Section 3: Corporate Booking Requests ——— */}
+                {approvalTab === 'corporate' && (
+                <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="h-8 w-8 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                    <Building2 size={16} className="text-indigo-400" />
+                  </div>
+                  <h2 className="text-lg font-bold text-white">Corporate Booking Requests</h2>
+                  {corporateBookings.filter(r => r.status === 'pending_approval').length > 0 && (
+                    <Badge className="bg-indigo-500/20 text-indigo-400 border-indigo-500/30">
+                      {corporateBookings.filter(r => r.status === 'pending_approval').length} pending
+                    </Badge>
                   )}
+                </div>
+                <p className="text-sm text-blue-300 mb-4">Review corporate booking documents and approve or decline.</p>
+                <div className="space-y-4">
+                  {corporateBookings.filter(r => r.status === 'pending_approval').length === 0 ? (
+                    <div className="flex h-32 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-blue-900/30 text-center">
+                      <div className="rounded-full bg-blue-500/10 p-3 text-blue-400">
+                        <Building2 size={28} />
+                      </div>
+                      <p className="text-sm font-bold text-white">No pending corporate bookings</p>
+                    </div>
+                  ) : (
+                    corporateBookings.filter(r => r.status === 'pending_approval').map(req => {
+                      const isExpanded = expandedCorpBooking === req.id;
+                      return (
+                        <Card key={req.id} className="bg-[#0f1f3d] border-indigo-500/30 overflow-hidden">
+                          <div
+                            className="p-5 cursor-pointer hover:bg-blue-500/5 transition-colors flex items-center justify-between"
+                            onClick={() => setExpandedCorpBooking(isExpanded ? null : req.id)}
+                          >
+                            <div className="flex items-center gap-4">
+                              <div className="h-12 w-12 rounded-xl bg-indigo-500/20 flex items-center justify-center shrink-0">
+                                <Building2 size={22} className="text-indigo-400" />
+                              </div>
+                              <div>
+                                <h3 className="text-white font-bold">{req.companyName}</h3>
+                                <p className="text-blue-300 text-sm">{req.renterFullName} &middot; {req.carMake} {req.carModel}</p>
+                                <p className="text-blue-400 text-xs">{new Date(req.createdAt).toLocaleDateString()}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <Badge className="bg-indigo-500/20 text-indigo-400 border-indigo-500/30">
+                                <Loader2 size={12} className="mr-1 animate-spin" /> Pending
+                              </Badge>
+                              {isExpanded ? <ChevronUp size={18} className="text-blue-400" /> : <ChevronDown size={18} className="text-blue-400" />}
+                            </div>
+                          </div>
+                          {isExpanded && (
+                            <div className="px-5 pb-5 border-t border-blue-900/30 pt-4 space-y-5">
+                              <div>
+                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><Building2 size={14} /> Company Information</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Company Name</p>
+                                    <p className="text-white text-sm font-bold">{req.companyName}</p>
+                                  </div>
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Department</p>
+                                    <p className="text-white text-sm">{req.bookingDepartment}</p>
+                                  </div>
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Position</p>
+                                    <p className="text-white text-sm">{req.registrantPosition}</p>
+                                  </div>
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Email</p>
+                                    <p className="text-white text-sm">{req.companyEmail}</p>
+                                  </div>
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Phone</p>
+                                    <p className="text-white text-sm">{req.companyPhone}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div>
+                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><User size={14} /> Renter Information</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Full Name</p>
+                                    <p className="text-white text-sm font-bold">{req.renterFullName}</p>
+                                  </div>
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Age</p>
+                                    <p className="text-white text-sm">{req.renterAge}</p>
+                                  </div>
+                                  <div className="bg-[#0a1628] rounded-xl p-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Address</p>
+                                    <p className="text-white text-sm">{req.renterAddress}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div>
+                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><FileText size={14} /> Uploaded Documents</h4>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                  <div>
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">National ID — Front</p>
+                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
+                                      <img src={req.nationalIdFront} alt="National ID Front" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.nationalIdFront, '_blank')} />
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">National ID — Back</p>
+                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
+                                      <img src={req.nationalIdBack} alt="National ID Back" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.nationalIdBack, '_blank')} />
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">License — Front</p>
+                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
+                                      <img src={req.driverLicenseFront} alt="License Front" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.driverLicenseFront, '_blank')} />
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">License — Back</p>
+                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
+                                      <img src={req.driverLicenseBack} alt="License Back" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.driverLicenseBack, '_blank')} />
+                                    </div>
+                                  </div>
+                                </div>
+                                {req.documents.length > 0 && (
+                                  <div className="mt-3">
+                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-2">Legal / Company Documents</p>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                      {req.documents.map(doc => (
+                                        <div key={doc.id} className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
+                                          <img src={doc.fileData} alt={doc.fileName} className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(doc.fileData, '_blank')} />
+                                          <p className="text-[10px] text-blue-400 p-1.5 truncate">{doc.fileName}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              {req.livenessPhoto && (
+                                <div>
+                                  <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><Camera size={14} /> Face Verification</h4>
+                                  <div className="w-48 bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
+                                    <img src={req.livenessPhoto} alt="Liveness" className="w-full h-36 object-cover" />
+                                  </div>
+                                </div>
+                              )}
+                              <div>
+                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><CarIcon size={14} /> Vehicle Requested</h4>
+                                <div className="flex items-center gap-4 bg-[#0a1628] rounded-xl p-3">
+                                  <div className="h-16 w-24 rounded-lg overflow-hidden shrink-0">
+                                    <img src={req.carImage} alt={req.carModel} className="h-full w-full object-cover" />
+                                  </div>
+                                  <div>
+                                    <p className="text-white font-bold">{req.carMake} {req.carModel}</p>
+                                    <p className="text-blue-300 text-xs">{req.carPlate}</p>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 pt-2">
+                                <Button
+                                  onClick={() => handleApproveCorporate(req.id)}
+                                  className="flex-1 h-11 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-xl gap-2"
+                                >
+                                  <CheckCircle2 size={18} /> Approve Booking
+                                </Button>
+                                <Button
+                                  onClick={() => handleRejectCorporate(req.id)}
+                                  className="flex-1 h-11 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30 rounded-xl gap-2"
+                                >
+                                  <X size={18} /> Decline
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </Card>
+                      );
+                    })
+                  )}
+                  {corporateBookings.filter(r => r.status !== 'pending_approval').length > 0 && (
+                    <div className="pt-2">
+                      <p className="text-xs text-blue-400 font-bold uppercase tracking-widest mb-3">History</p>
+                      <div className="space-y-2">
+                        {corporateBookings.filter(r => r.status !== 'pending_approval').map(req => {
+                          const isApproved = req.status === 'host_accepted';
+                          const isRejected = req.status === 'rejected';
+                          return (
+                            <div key={req.id} className="bg-[#0a1628] rounded-xl p-3 flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                                  <Building2 size={16} className="text-indigo-400" />
+                                </div>
+                                <div>
+                                  <p className="text-white text-sm font-bold">{req.companyName}</p>
+                                  <p className="text-blue-300 text-xs">{req.carMake} {req.carModel}</p>
+                                </div>
+                              </div>
+                              {isApproved && (
+                                <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">
+                                  <CheckCircle2 size={12} className="mr-1" /> Accepted
+                                </Badge>
+                              )}
+                              {isRejected && (
+                                <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
+                                  <XCircle size={12} className="mr-1" /> Declined
+                                </Badge>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                </div>
+                )}
                 </div>
                 <p className="text-sm text-blue-300 mb-4">Review returned vehicle condition before confirming receipt.</p>
                 <div className="space-y-4">
@@ -1257,16 +1537,16 @@ export const Host = () => {
                               {/* Actions */}
                               <div className="flex items-center gap-3 pt-2">
                                 <Button
-                                  onClick={() => handleApproveRental(req.id)}
+                                  onClick={() => handleApproveReturn(ret.id)}
                                   className="flex-1 h-11 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-xl gap-2"
                                 >
-                                  <CheckCircle2 size={18} /> {t('host.approveUnlockPayment')}
+                                  <CheckCircle2 size={18} /> Approve Return — Vehicle Received
                                 </Button>
                                 <Button
-                                  onClick={() => handleRejectRental(req.id)}
+                                  onClick={() => handleDisputeReturn(ret.id)}
                                   className="flex-1 h-11 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30 rounded-xl gap-2"
                                 >
-                                  <X size={18} /> {t('host.decline')}
+                                  <AlertTriangle size={18} /> Dispute
                                 </Button>
                               </div>
                             </div>
@@ -1472,223 +1752,6 @@ export const Host = () => {
               </div>
               )}
 
-              {/* â”€â”€â”€ Section 3: Rental Requests (Pre-Payment) â”€â”€â”€ */}
-              {approvalTab === 'rentals' && (
-                <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="h-8 w-8 rounded-lg bg-yellow-500/20 flex items-center justify-center">
-                    <UserCheck size={16} className="text-yellow-400" />
-                  </div>
-                  <h2 className="text-lg font-bold text-white">Rental Requests</h2>
-                  {rentalRequests.filter(r => r.status === 'pending').length > 0 && (
-                    <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-                      {rentalRequests.filter(r => r.status === 'pending').length} pending
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-blue-300 mb-4">Review renter documents and approve or decline before they can proceed to payment.</p>
-                <div className="space-y-4">
-                  {rentalRequests.filter(r => r.status === 'pending').length === 0 ? (
-                    <div className="flex h-32 flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-blue-900/30 text-center">
-                      <div className="rounded-full bg-blue-500/10 p-3 text-blue-400">
-                        <ClipboardCheck size={28} />
-                      </div>
-                      <p className="text-sm font-bold text-white">No pending rental requests</p>
-                    </div>
-                  ) : (
-                    rentalRequests.filter(r => r.status === 'pending').map(req => {
-                      const isExpanded = expandedRentalReq === req.id;
-                      return (
-                        <Card key={req.id} className="bg-[#0f1f3d] border-yellow-500/30 overflow-hidden">
-                          <div
-                            className="p-5 cursor-pointer hover:bg-blue-500/5 transition-colors flex items-center justify-between"
-                            onClick={() => setExpandedRentalReq(isExpanded ? null : req.id)}
-                          >
-                            <div className="flex items-center gap-4">
-                              <div className="h-12 w-12 rounded-xl overflow-hidden shrink-0">
-                                <img src={req.renterPhoto} alt={req.renterName} className="h-full w-full object-cover" />
-                              </div>
-                              <div>
-                                <h3 className="text-white font-bold">{req.renterName}</h3>
-                                <p className="text-blue-300 text-sm">{req.carMake} {req.carModel} &middot; {req.carPlate}</p>
-                                <p className="text-blue-400 text-xs">{new Date(req.createdAt).toLocaleDateString()} &middot; ETB {req.totalAmount.toLocaleString()}</p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30">
-                                <Loader2 size={12} className="mr-1 animate-spin" /> Pending
-                              </Badge>
-                              {isExpanded ? <ChevronUp size={18} className="text-blue-400" /> : <ChevronDown size={18} className="text-blue-400" />}
-                            </div>
-                          </div>
-                          {isExpanded && (
-                            <div className="px-5 pb-5 border-t border-blue-900/30 pt-4 space-y-5">
-                              {/* Renter personal info - two column grid */}
-                              <div>
-                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><User size={14} /> Personal Information</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Full Name</p>
-                                    <p className="text-white text-sm font-bold">{req.renterName}</p>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Age</p>
-                                    <p className="text-white text-sm">{req.age}</p>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">National ID</p>
-                                    <p className="text-white text-sm font-mono">{req.nationalId}</p>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Phone</p>
-                                    <p className="text-white text-sm">{req.renterPhone}</p>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Email</p>
-                                    <p className="text-white text-sm">{req.renterEmail}</p>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Address</p>
-                                    <p className="text-white text-sm">{req.renterAddress}</p>
-                                  </div>
-                                </div>
-                              </div>
-                              {/* Emergency Contact */}
-                              {req.familyNumber && (
-                                <div>
-                                  <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><Phone size={14} /> Emergency Contact</h4>
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    <div className="bg-[#0a1628] rounded-xl p-3">
-                                      <p className="text-[10px] text-blue-500 font-bold uppercase">Contact Number</p>
-                                      <p className="text-white text-sm">{req.familyNumber}</p>
-                                    </div>
-                                    <div className="bg-[#0a1628] rounded-xl p-3">
-                                      <p className="text-[10px] text-blue-500 font-bold uppercase">Relation</p>
-                                      <p className="text-white text-sm">{req.relation}</p>
-                                    </div>
-                                    <div className="bg-[#0a1628] rounded-xl p-3">
-                                      <p className="text-[10px] text-blue-500 font-bold uppercase">Contact Name</p>
-                                      <p className="text-white text-sm">{req.familyName}</p>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                              {/* Rental Purpose */}
-                              {req.purpose && (
-                                <div>
-                                  <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><Info size={14} /> Rental Purpose</h4>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-blue-200 text-sm italic">"{req.purpose}"</p>
-                                  </div>
-                                </div>
-                              )}
-                              {/* Documents - 4 image grid with front/back */}
-                              <div>
-                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><FileText size={14} /> Uploaded Documents</h4>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                  <div>
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">National ID — Front</p>
-                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
-                                      <img src={req.nationalIdPhotoFront} alt="National ID Front" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.nationalIdPhotoFront, '_blank')} />
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">National ID — Back</p>
-                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
-                                      <img src={req.nationalIdPhotoBack} alt="National ID Back" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.nationalIdPhotoBack, '_blank')} />
-                                    </div>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">License — Front</p>
-                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
-                                      <img src={req.driverLicensePhotoFront} alt="License Front" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.driverLicensePhotoFront, '_blank')} />
-                                    </div>
-                                    <p className="text-xs text-blue-300 mt-1">License: {req.driverLicense}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">License — Back</p>
-                                    <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
-                                      <img src={req.driverLicensePhotoBack} alt="License Back" className="w-full h-24 object-cover hover:scale-105 transition-transform cursor-pointer" onClick={() => window.open(req.driverLicensePhotoBack, '_blank')} />
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                              {/* Rental details */}
-                              <div>
-                                <h4 className="text-xs uppercase tracking-widest text-blue-400 font-bold mb-3 flex items-center gap-2"><Calendar size={14} /> Rental Details</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                  <div className="bg-[#0a1628] rounded-xl overflow-hidden border border-blue-900/30">
-                                    <img src={req.carImage} alt={req.carModel} className="w-full h-28 object-cover" />
-                                    <div className="p-3">
-                                      <p className="text-white font-bold text-sm">{req.carMake} {req.carModel}</p>
-                                      <p className="text-blue-300 text-xs">{req.carPlate}</p>
-                                    </div>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Duration</p>
-                                    <p className="text-white text-sm mt-1">{new Date(req.startDate).toLocaleDateString()} - {new Date(req.endDate).toLocaleDateString()}</p>
-                                  </div>
-                                  <div className="bg-[#0a1628] rounded-xl p-3">
-                                    <p className="text-[10px] text-blue-500 font-bold uppercase">Total Amount</p>
-                                    <p className="text-yellow-400 font-bold text-lg mt-1">ETB {req.totalAmount.toLocaleString()}</p>
-                                    <p className="text-blue-300 text-xs mt-1">via <span className="font-bold capitalize">{req.paymentMethod || 'pending'}</span></p>
-                                  </div>
-                                </div>
-                              </div>
-                              {req.notes && (
-                                <div className="bg-[#0a1628] rounded-xl p-3">
-                                  <p className="text-[10px] text-blue-500 font-bold uppercase mb-1">Renter Notes</p>
-                                  <p className="text-blue-200 text-sm italic">"{req.notes}"</p>
-                                </div>
-                              )}
-                              {/* Actions */}
-                              <div className="flex items-center gap-3 pt-2">
-                                <Button
-                                  onClick={() => handleApproveRental(req.id)}
-                                  className="flex-1 h-11 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-xl gap-2"
-                                >
-                                  <CheckCircle2 size={18} /> {t('host.approveUnlockPayment')}
-                                </Button>
-                                <Button
-                                  onClick={() => handleRejectRental(req.id)}
-                                  className="flex-1 h-11 bg-red-500/20 text-red-400 hover:bg-red-500/30 border border-red-500/30 rounded-xl gap-2"
-                                >
-                                  <X size={18} /> {t('host.decline')}
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </Card>
-                      );
-                    })
-                  )}
-                  {/* Approved / Declined history */}
-                  {rentalRequests.filter(r => r.status !== 'pending').length > 0 && (
-                    <div className="pt-2">
-                      <p className="text-xs text-blue-400 font-bold uppercase tracking-widest mb-3">History</p>
-                      <div className="space-y-2">
-                        {rentalRequests.filter(r => r.status !== 'pending').map(req => (
-                          <div key={req.id} className="bg-[#0a1628] rounded-xl p-3 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className="h-8 w-8 rounded-full overflow-hidden">
-                                <img src={req.renterPhoto} alt="" className="h-full w-full object-cover" />
-                              </div>
-                              <div>
-                                <p className="text-white text-sm font-bold">{req.renterName}</p>
-                                <p className="text-blue-300 text-xs">{req.carMake} {req.carModel}</p>
-                              </div>
-                            </div>
-                            <Badge className={req.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}>
-                              {req.status === 'approved' ? 'Approved' : 'Declined'}
-                            </Badge>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-              )}
             </motion.div>
           )}
 

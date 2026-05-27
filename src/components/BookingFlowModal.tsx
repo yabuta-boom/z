@@ -10,6 +10,7 @@ import {
   Clock,
   CreditCard,
   FileText,
+  ChevronLeft,
   ChevronRight,
   ArrowRight,
   Mail,
@@ -40,7 +41,7 @@ import html2canvas from 'html2canvas';
 import { format } from 'date-fns';
 import { addDoc, collection } from 'firebase/firestore';
 import { db } from '@/firebase';
-import { saveRentalRequests, getRentalRequests, RentalRequest } from '../lib/fleetUtils';
+import { saveBookingRequests as saveRentalRequests, getBookingRequests as getRentalRequests, RentalRequest } from '../lib/fleetUtils';
 
 type FlowStep = 'form' | 'phone' | 'national-id' | 'upload' | 'waiting' | 'signpay' | 'contact';
 
@@ -306,6 +307,11 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
 
   const currentStepIdx = allSteps.indexOf(step);
 
+  const goBack = () => {
+    const idx = allSteps.indexOf(step);
+    if (idx > 0) setStep(allSteps[idx - 1]);
+  };
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-md p-4">
       <motion.div
@@ -334,31 +340,43 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
           )}
         </div>
 
-        {/* Step indicator */}
-        <div className="px-8 pt-5 pb-1 overflow-x-auto">
-          <div className="flex items-center gap-1 min-w-max">
+        {/* Modern step indicator */}
+        <div className="px-8 pt-3 pb-2">
+          <div className="h-1 bg-gray-100 rounded-full overflow-hidden mb-3">
+            <motion.div
+              className="h-full bg-gradient-to-r from-primary to-primary/60 rounded-full"
+              initial={{ width: 0 }}
+              animate={{ width: `${(allSteps.indexOf(step) / (allSteps.length - 1)) * 100}%` }}
+              transition={{ duration: 0.5, ease: "easeOut" }}
+            />
+          </div>
+          <div className="flex items-center justify-center gap-1.5">
             {allSteps.map((s, i) => {
               const stepIdx = allSteps.indexOf(s);
-              const isActive = stepIdx <= currentStepIdx;
+              const isActive = stepIdx <= allSteps.indexOf(step);
               const isCurrent = s === step;
               return (
                 <React.Fragment key={s}>
-                  {i > 0 && (
-                    <div className={`w-6 sm:w-10 h-0.5 rounded-full ${isActive ? 'bg-primary' : 'bg-gray-200'}`} />
+                  <motion.div
+                    layout
+                    className={`rounded-full transition-all duration-300 ${
+                      isCurrent ? 'h-2.5 w-2.5 bg-primary shadow-sm shadow-primary/40' :
+                      isActive ? 'h-1.5 w-1.5 bg-primary/60' : 'h-1.5 w-1.5 bg-gray-200'
+                    }`}
+                  />
+                  {i < allSteps.length - 1 && (
+                    <div className={`h-px flex-1 max-w-8 ${isActive ? 'bg-primary/30' : 'bg-gray-100'}`} />
                   )}
-                  <div className={`flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-full text-[10px] sm:text-xs font-bold flex-shrink-0 ${
-                    isCurrent ? 'bg-primary text-white scale-110' :
-                    isActive ? 'bg-primary/20 text-primary' : 'bg-gray-100 text-gray-400'
-                  }`}>
-                    {isActive && !isCurrent ? <CheckCircle2 size={14} /> : i + 1}
-                  </div>
                 </React.Fragment>
               );
             })}
           </div>
+          <p className="text-[10px] text-center text-muted-foreground/70 mt-2 font-medium tracking-wide">
+            Step {allSteps.indexOf(step) + 1} of {allSteps.length} &mdash; {stepLabels[step]}
+          </p>
         </div>
 
-        <div className="p-8 max-h-[70vh] overflow-y-auto">
+        <div className="max-h-[70vh] overflow-y-auto"><div className="p-8 pb-20">
           <AnimatePresence mode="wait">
             {/* STEP 1: Personal Information Form */}
             {step === 'form' && (
@@ -436,9 +454,14 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                             />
                           </div>
                         </div>
-                        <Button onClick={handleSendPhoneOtp} disabled={phoneOtpLoading} className="w-full h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
-                          {phoneOtpLoading ? <><Loader2 className="mr-2 animate-spin" size={20} /> Sending...</> : <><Smartphone className="mr-2" size={20} /> Send Verification Code</>}
-                        </Button>
+                        <div className="flex gap-3">
+                          <Button variant="outline" onClick={goBack} className="h-14 rounded-2xl text-base font-bold uppercase tracking-wider px-5">
+                            <ChevronLeft size={20} />
+                          </Button>
+                          <Button onClick={handleSendPhoneOtp} disabled={phoneOtpLoading} className="flex-1 h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
+                            {phoneOtpLoading ? <><Loader2 className="mr-2 animate-spin" size={20} /> Sending...</> : <><Smartphone className="mr-2" size={20} /> Send Verification Code</>}
+                          </Button>
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-4">
@@ -456,9 +479,14 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                             <span className="text-amber-600 text-[10px] font-bold uppercase">National ID: <code className="bg-white px-2 py-0.5 rounded font-bold text-amber-800 border border-amber-200">654321</code></span>
                           </div>
                         </div>
-                        <Button onClick={handleVerifyPhoneOtp} disabled={phoneOtp.length < 6} className="w-full h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
-                          <CheckCircle2 className="mr-2" size={20} /> Verify & Continue
-                        </Button>
+                        <div className="flex gap-3">
+                          <Button variant="outline" onClick={goBack} className="h-14 rounded-2xl text-base font-bold uppercase tracking-wider px-5">
+                            <ChevronLeft size={20} />
+                          </Button>
+                          <Button onClick={handleVerifyPhoneOtp} disabled={phoneOtp.length < 6} className="flex-1 h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
+                            <CheckCircle2 className="mr-2" size={20} /> Verify & Continue
+                          </Button>
+                        </div>
                         <div className="text-center">
                           {phoneOtpTimer > 0 ? <p className="text-sm text-muted-foreground">Resend in <strong className="text-primary">{phoneOtpTimer}s</strong></p> :
                             <button onClick={handleSendPhoneOtp} className="text-sm font-bold text-primary underline">Resend OTP</button>}
@@ -471,7 +499,12 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                     <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-green-600 mb-4"><CheckCircle2 size={32} /></div>
                     <p className="font-bold text-lg text-green-700">Phone Verified!</p>
                     <p className="text-sm text-muted-foreground">+251 {phoneNumber}</p>
-                    <Button onClick={() => setStep('national-id')} className="mt-6 h-12 rounded-2xl font-bold uppercase tracking-wider">Continue <ChevronRight className="ml-2" size={18} /></Button>
+                    <div className="flex gap-3 mt-6">
+                      <Button variant="outline" onClick={goBack} className="h-12 rounded-2xl font-bold uppercase tracking-wider px-4">
+                        <ChevronLeft size={18} />
+                      </Button>
+                      <Button onClick={() => setStep('national-id')} className="flex-1 h-12 rounded-2xl font-bold uppercase tracking-wider">Continue <ChevronRight className="ml-2" size={18} /></Button>
+                    </div>
                   </div>
                 )}
               </motion.div>
@@ -500,9 +533,14 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                             <span className="text-amber-600 text-[10px] font-bold uppercase">National ID: <code className="bg-white px-2 py-0.5 rounded font-bold text-amber-800 border border-amber-200">654321</code></span>
                           </div>
                         </div>
-                        <Button onClick={handleSendNationalIdOtp} disabled={nationalIdOtpLoading || !nationalId.trim()} className="w-full h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
-                          {nationalIdOtpLoading ? <><Loader2 className="mr-2 animate-spin" size={20} /> Sending...</> : <><ShieldCheck className="mr-2" size={20} /> Send OTP to National ID</>}
-                        </Button>
+                        <div className="flex gap-3">
+                          <Button variant="outline" onClick={goBack} className="h-14 rounded-2xl text-base font-bold uppercase tracking-wider px-5">
+                            <ChevronLeft size={20} />
+                          </Button>
+                          <Button onClick={handleSendNationalIdOtp} disabled={nationalIdOtpLoading || !nationalId.trim()} className="flex-1 h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
+                            {nationalIdOtpLoading ? <><Loader2 className="mr-2 animate-spin" size={20} /> Sending...</> : <><ShieldCheck className="mr-2" size={20} /> Send OTP to National ID</>}
+                          </Button>
+                        </div>
                       </div>
                     ) : (
                       <div className="space-y-4">
@@ -513,9 +551,14 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                           <label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">OTP Code</label>
                           <Input value={nationalIdOtp} onChange={e => setNationalIdOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="654321" className="h-14 rounded-2xl border-2 font-bold text-2xl text-center tracking-[0.5em] focus-visible:ring-primary" maxLength={6} />
                         </div>
-                        <Button onClick={handleVerifyNationalIdOtp} disabled={nationalIdOtp.length < 6} className="w-full h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
-                          <CheckCircle2 className="mr-2" size={20} /> Verify & Continue
-                        </Button>
+                        <div className="flex gap-3">
+                          <Button variant="outline" onClick={goBack} className="h-14 rounded-2xl text-base font-bold uppercase tracking-wider px-5">
+                            <ChevronLeft size={20} />
+                          </Button>
+                          <Button onClick={handleVerifyNationalIdOtp} disabled={nationalIdOtp.length < 6} className="flex-1 h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
+                            <CheckCircle2 className="mr-2" size={20} /> Verify & Continue
+                          </Button>
+                        </div>
                         <div className="text-center">
                           {nationalIdOtpTimer > 0 ? <p className="text-sm text-muted-foreground">Resend in <strong className="text-primary">{nationalIdOtpTimer}s</strong></p> :
                             <button onClick={handleSendNationalIdOtp} className="text-sm font-bold text-primary underline">Resend OTP</button>}
@@ -528,7 +571,12 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                     <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-green-600 mb-4"><CheckCircle2 size={32} /></div>
                     <p className="font-bold text-lg text-green-700">National ID Verified!</p>
                     <p className="text-sm text-muted-foreground">{nationalId}</p>
-                    <Button onClick={() => setStep('upload')} className="mt-6 h-12 rounded-2xl font-bold uppercase tracking-wider">Continue <ChevronRight className="ml-2" size={18} /></Button>
+                    <div className="flex gap-3 mt-6">
+                      <Button variant="outline" onClick={goBack} className="h-12 rounded-2xl font-bold uppercase tracking-wider px-4">
+                        <ChevronLeft size={18} />
+                      </Button>
+                      <Button onClick={() => setStep('upload')} className="flex-1 h-12 rounded-2xl font-bold uppercase tracking-wider">Continue <ChevronRight className="ml-2" size={18} /></Button>
+                    </div>
                   </div>
                 )}
               </motion.div>
@@ -583,9 +631,14 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
                   </p>
                 </div>
 
-                <Button onClick={handleUploadSubmit} className="w-full h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
-                  Submit Documents <ChevronRight className="ml-2" size={20} />
-                </Button>
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={goBack} className="h-14 rounded-2xl text-base font-bold uppercase tracking-wider px-5">
+                    <ChevronLeft size={20} />
+                  </Button>
+                  <Button onClick={handleUploadSubmit} className="flex-1 h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20">
+                    Submit Documents <ChevronRight className="ml-2" size={20} />
+                  </Button>
+                </div>
               </motion.div>
             )}
 
@@ -684,12 +737,17 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
 
                 <div className="flex items-start gap-3 p-4 rounded-2xl bg-primary/5 border border-primary/10">
                   <Checkbox id="sig-terms" checked={accepted} onCheckedChange={(c) => setAccepted(c as boolean)} className="mt-0.5 h-5 w-5 rounded-lg data-[state=checked]:bg-primary" />
-                  <Label htmlFor="sig-terms" className="text-sm font-medium cursor-pointer leading-snug">I confirm all details are correct and agree to the rental terms</Label>
+                  <Label htmlFor="sig-terms" className="text-sm font-medium cursor-pointer leading-snug">I confirm all details are correct and agree to the rental terms including the <strong>refundable security deposit (money frozen)</strong> as a bank hold</Label>
                 </div>
 
-                <Button onClick={handleSignAndPay} disabled={!accepted || isProcessing} className="w-full h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20 gap-2">
-                  {isProcessing ? <><Loader2 className="animate-spin" size={20} /> Processing...</> : <><CreditCard size={20} /> Pay ETB {totalAmount.toLocaleString()} <ChevronRight size={20} /></>}
-                </Button>
+                <div className="flex gap-3">
+                  <Button variant="outline" onClick={goBack} className="h-14 rounded-2xl text-base font-bold uppercase tracking-wider px-5">
+                    <ChevronLeft size={20} />
+                  </Button>
+                  <Button onClick={handleSignAndPay} disabled={!accepted || isProcessing} className="flex-1 h-14 rounded-2xl text-base font-bold uppercase tracking-wider shadow-xl shadow-primary/20 gap-2">
+                    {isProcessing ? <><Loader2 className="animate-spin" size={20} /> Processing...</> : <><CreditCard size={20} /> Pay ETB {totalAmount.toLocaleString()} <ChevronRight size={20} /></>}
+                  </Button>
+                </div>
               </motion.div>
             )}
 
@@ -783,7 +841,7 @@ export const BookingFlowModal: React.FC<BookingFlowModalProps> = ({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+        </div></div>
       </motion.div>
 
       <AnimatePresence>

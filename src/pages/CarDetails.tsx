@@ -1,6 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { cn } from '@/lib/utils';
 import {
   Star,
   MapPin,
@@ -10,18 +9,16 @@ import {
   ShieldCheck,
   Calendar as CalendarIcon,
   CheckCircle2,
-  Info,
-  ShieldAlert,
-  Award,
-  MessageSquare,
-  UserCheck,
   ArrowLeft,
   ArrowRight,
-  FileText
+  FileText,
+  CreditCard,
+  ChevronRight,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MOCK_CARS, MOCK_REVIEWS } from '../constants';
-import { Car } from '../types';
+import type { Car } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -34,10 +31,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { addDoc, collection } from 'firebase/firestore';
-import { db } from '../firebase';
-import { SmartGPSRoad } from '@/components/SmartGPSRoad';
-import { BookingFlowModal } from '@/components/BookingFlowModal';
+
+const BookingFlowModal = lazy(() => import('@/components/BookingFlowModal').then(m => ({ default: m.BookingFlowModal })));
+const CorporateBookingModal = lazy(() => import('@/components/CorporateBookingModal').then(m => ({ default: m.CorporateBookingModal })));
 
 export const CarDetails = () => {
   const { id } = useParams();
@@ -66,6 +62,7 @@ export const CarDetails = () => {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showBookingBar, setShowBookingBar] = useState(false);
   const [showBookingFlow, setShowBookingFlow] = useState(false);
+  const [showCorporateBooking, setShowCorporateBooking] = useState(false);
 
   const paymentMethods = [
     { id: 'telebirr', name: 'Telebirr', logo: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSZpPh0ccu4nKegTIcp3ojeOMT5CP7ax8ZqHQ&s' },
@@ -76,14 +73,21 @@ export const CarDetails = () => {
     { id: 'visa', name: 'Visa / Mastercard', logo: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/MasterCard_Logo.svg/1280px-MasterCard_Logo.svg.png' },
   ];
 
-  const [touchStart, setTouchStart] = useState<number | null>(null);
-  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const touchStartRef = useRef<number | null>(null);
+  const touchEndRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let ticking = false;
     const handleScroll = () => {
-      setShowBookingBar(window.scrollY > 400);
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          setShowBookingBar(window.scrollY > 400);
+          ticking = false;
+        });
+        ticking = true;
+      }
     };
-    window.addEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
@@ -117,6 +121,11 @@ export const CarDetails = () => {
       return;
     }
 
+    if (profile?.role === 'corporate_renter') {
+      setShowCorporateBooking(true);
+      return;
+    }
+
     if (!agreedToTerms) {
       toast.error('Please agree to the Terms & Conditions before booking');
       return;
@@ -139,17 +148,17 @@ export const CarDetails = () => {
   const totalAmount = days > 0 ? days * car.pricePerDay : 0;
 
   const onTouchStart = (e: React.TouchEvent) => {
-    setTouchStart(e.targetTouches[0].clientX);
-    setTouchEnd(null);
+    touchStartRef.current = e.targetTouches[0].clientX;
+    touchEndRef.current = null;
   };
 
   const onTouchMove = (e: React.TouchEvent) => {
-    setTouchEnd(e.targetTouches[0].clientX);
+    touchEndRef.current = e.targetTouches[0].clientX;
   };
 
   const onTouchEnd = () => {
-    if (!touchStart || !touchEnd) return;
-    const distance = touchStart - touchEnd;
+    if (touchStartRef.current === null || touchEndRef.current === null) return;
+    const distance = touchStartRef.current - touchEndRef.current;
     if (distance > 50 && car.images.length > 1) goNext();
     if (distance < -50 && car.images.length > 1) goPrev();
   };
@@ -180,7 +189,7 @@ export const CarDetails = () => {
         </div>
 
         {/* Image + Booking Card Row */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_440px] gap-8">
           {/* Left: Image Gallery + Details */}
           <div className="min-w-0">
             <section className="relative aspect-video w-full overflow-hidden rounded-2xl shadow-xl bg-gray-100" id="image-gallery">
@@ -203,6 +212,7 @@ export const CarDetails = () => {
                     transition={{ duration: 0.3, ease: "easeInOut" }}
                     className="h-full w-full object-cover"
                     referrerPolicy="no-referrer"
+                    loading={activeImage === 0 ? 'eager' : 'lazy'}
                   />
                 </AnimatePresence>
 
@@ -235,7 +245,7 @@ export const CarDetails = () => {
                           activeImage === idx ? 'border-blue-500 scale-110 shadow-lg' : 'border-white/70 hover:border-white'
                         }`}
                       >
-                        <img src={img} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                        <img src={img} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" loading="lazy" />
                       </button>
                     ))}
                   </div>
@@ -322,37 +332,50 @@ export const CarDetails = () => {
           {/* Right: Booking Card (Sticky) */}
           <div className="lg:col-span-1">
             <div className="relative">
-              <Card className="sticky top-24 border-primary/10 shadow-2xl rounded-[2rem] overflow-hidden">
-              <CardContent className="p-6 space-y-6">
-                <div>
-                  <h3 className="text-xl sm:text-2xl font-bold uppercase tracking-tight">{t('carDetails.bookThisVehicle')}</h3>
-                  <p className="text-sm text-muted-foreground mt-1">{t('carDetails.selectDates')}</p>
+              <Card className="sticky top-24 border-primary/10 shadow-2xl rounded-[2rem] overflow-visible">
+              <div className="absolute -inset-0.5 bg-gradient-to-b from-primary/20 to-transparent rounded-[2rem] opacity-60 pointer-events-none" />
+              <CardContent className="relative p-8 space-y-7 bg-card rounded-[2rem]">
+                {/* Header */}
+                <div className="text-center">
+                  <div className="inline-flex items-center justify-center h-12 w-12 rounded-2xl bg-primary/10 mb-3">
+                    <CalendarIcon size={24} className="text-primary" />
+                  </div>
+                  <h3 className="text-2xl font-extrabold tracking-tight">{t('carDetails.bookThisVehicle')}</h3>
+                  <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">{t('carDetails.selectDates')}</p>
                 </div>
+
+                <div className="h-px bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
 
                   {/* Date Range Picker */}
                   <div>
-                    <label className="text-sm font-bold uppercase tracking-wider mb-3 block">Rental Period</label>
+                    <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                      <CalendarIcon size={14} className="text-primary" />
+                      Rental Period
+                    </label>
                     <Popover>
-                      <PopoverTrigger>
-                        <Button variant="outline" className="w-full justify-between font-bold h-12 rounded-xl border-2 hover:border-primary/50 transition-all">
-                          <span className="flex items-center gap-2">
-                            <CalendarIcon size={16} className="text-primary" />
-                            {dateRange?.from ? (
-                              dateRange.to ? (
-                                <span>{format(dateRange.from, 'MMM d')} – {format(dateRange.to, 'MMM d, yyyy')}</span>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="w-full justify-between font-semibold h-14 rounded-2xl border-2 hover:border-primary/50 transition-all text-base group">
+                          <span className="flex items-center gap-3">
+                            <CalendarIcon size={18} className="text-primary shrink-0" />
+                            <span>
+                              {dateRange?.from ? (
+                                dateRange.to ? (
+                                  <span className="font-bold">{format(dateRange.from, 'MMM d')} – {format(dateRange.to, 'MMM d, yyyy')}</span>
+                                ) : (
+                                  <span className="text-foreground">{format(dateRange.from, 'PPP')}</span>
+                                )
                               ) : (
-                                <span>{format(dateRange.from, 'PPP')}</span>
-                              )
-                            ) : (
-                              <span className="text-muted-foreground font-normal">Pick up – Drop off</span>
-                            )}
+                                <span className="text-muted-foreground font-normal">Pick up date – Drop off date</span>
+                              )}
+                            </span>
                           </span>
                           {days > 0 && (
-                            <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold">{days} {days === 1 ? 'day' : 'days'}</span>
+                            <span className="text-xs bg-primary/10 text-primary px-3 py-1 rounded-full font-bold">{days} {days === 1 ? 'day' : 'days'}</span>
                           )}
+                          {!dateRange?.from && <ChevronRight size={16} className="text-muted-foreground group-hover:translate-x-0.5 transition-transform" />}
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-2" align="start">
+                      <PopoverContent className="w-auto p-3 rounded-2xl shadow-2xl" align="start">
                         <Calendar
                           mode="range"
                           selected={dateRange}
@@ -360,12 +383,23 @@ export const CarDetails = () => {
                           disabled={(date) => date < new Date()}
                           numberOfMonths={2}
                           initialFocus
+                          className="rounded-xl"
                         />
                         {dateRange?.from && (
-                          <div className="flex items-center justify-between px-2 py-2 border-t mt-2">
+                          <div className="flex items-center justify-between px-2 py-3 border-t mt-2">
                             <span className="text-xs text-muted-foreground">
-                              {dateRange.to ? `${format(dateRange.from, 'MMM d')} → ${format(dateRange.to, 'MMM d, yyyy')}` : 'Select end date'}
+                              {dateRange.to ? (
+                                <span className="flex items-center gap-1">
+                                  <CalendarIcon size={12} />
+                                  {format(dateRange.from, 'MMM d')} → {format(dateRange.to, 'MMM d, yyyy')}
+                                </span>
+                              ) : (
+                                'Select drop-off date'
+                              )}
                             </span>
+                            {dateRange?.from && !dateRange?.to && (
+                              <span className="text-[10px] text-primary font-bold">Tap an end date</span>
+                            )}
                           </div>
                         )}
                       </PopoverContent>
@@ -374,19 +408,30 @@ export const CarDetails = () => {
 
                   {/* Payment Method */}
                   <div>
-                    <label className="text-sm font-bold uppercase tracking-wider mb-3 block">Payment Method</label>
-                    <div className="grid grid-cols-3 gap-3">
+                    <label className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                      <CreditCard size={14} className="text-primary" />
+                      Payment Method
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
                       {paymentMethods.map((method) => (
                         <button
                           key={method.id}
                           onClick={() => setSelectedPayment(method.id)}
-                          className={`p-3 border-2 rounded-xl transition-all ${
+                          className={`relative flex flex-col items-center gap-2 p-4 border-2 rounded-2xl transition-all duration-200 ${
                             selectedPayment === method.id
-                              ? 'border-primary bg-primary/5'
-                              : 'border-gray-200 hover:border-primary/50'
+                              ? 'border-primary bg-primary/5 shadow-md shadow-primary/10 scale-[1.02]'
+                              : 'border-border hover:border-primary/40 hover:bg-accent/30'
                           }`}
                         >
-                          <img src={method.logo} alt={method.name} className="h-8 w-full object-contain" />
+                          {selectedPayment === method.id && (
+                            <div className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-primary flex items-center justify-center shadow-lg">
+                              <CheckCircle2 size={14} className="text-white" />
+                            </div>
+                          )}
+                          <img src={method.logo} alt={method.name} className="h-7 w-full object-contain" loading="lazy" />
+                          <span className={`text-[10px] font-bold uppercase tracking-wider ${selectedPayment === method.id ? 'text-primary' : 'text-muted-foreground'}`}>
+                            {method.name}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -394,33 +439,42 @@ export const CarDetails = () => {
 
                   {/* Price Summary */}
                   {days > 0 && (
-                    <div className="bg-primary/5 p-4 rounded-xl space-y-2">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-muted-foreground">ETB {car.pricePerDay.toLocaleString()} x {days} days</span>
-                        <span className="font-bold">ETB {(car.pricePerDay * days).toLocaleString()}</span>
+                    <div className="bg-gradient-to-br from-primary/5 to-primary/10 p-5 rounded-2xl border border-primary/10 space-y-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-muted-foreground">ETB {car.pricePerDay.toLocaleString()} × {days} {days === 1 ? 'day' : 'days'}</span>
+                        <span className="font-semibold">ETB {(car.pricePerDay * days).toLocaleString()}</span>
                       </div>
-                      <div className="flex justify-between text-lg font-bold">
-                        <span>{t('carDetails.total')}</span>
-                        <span className="text-primary">ETB {totalAmount.toLocaleString()}</span>
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Insurance (ETB 100/day)</span>
+                        <span className="font-medium">ETB {(days * 100).toLocaleString()}</span>
                       </div>
+                      <div className="h-px bg-border" />
+                      <div className="flex items-center justify-between">
+                        <span className="text-base font-bold">Total</span>
+                        <span className="text-xl font-extrabold text-primary">ETB {totalAmount.toLocaleString()}</span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground text-center pt-1">
+                        + ETB 10,000 security hold (refundable)
+                      </p>
                     </div>
                   )}
 
                   {/* Terms & Conditions */}
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-start gap-3 p-4 rounded-2xl bg-accent/50 border border-border/50">
                     <Checkbox
                       id="terms"
                       checked={agreedToTerms}
                       onCheckedChange={(checked) => setAgreedToTerms(checked === true)}
+                      className="mt-0.5 h-5 w-5 rounded-lg data-[state=checked]:bg-primary data-[state=checked]:border-primary"
                     />
                     <label
                       htmlFor="terms"
-                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                      className="text-sm leading-relaxed cursor-pointer select-none"
                     >
-                      {t('carDetails.agreeTerms')}{' '}
+                      <span className="text-muted-foreground">{t('carDetails.agreeTerms')} </span>
                       <button
-                        onClick={() => setShowTermsModal(true)}
-                        className="text-primary underline font-bold"
+                        onClick={(e) => { e.preventDefault(); setShowTermsModal(true); }}
+                        className="text-primary underline font-bold hover:text-primary/80 transition-colors"
                       >
                         {t('carDetails.termsConditions')}
                       </button>
@@ -429,12 +483,38 @@ export const CarDetails = () => {
 
                   {/* Book Button */}
                   <Button
-                    className="w-full font-bold text-lg py-6"
+                    className="w-full font-bold text-base h-14 rounded-2xl bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary shadow-xl shadow-primary/20 hover:shadow-primary/30 transition-all duration-300 disabled:opacity-50 disabled:shadow-none"
                     onClick={handleBookingClick}
                     disabled={isBooking}
                   >
-                    {isBooking ? t('carDetails.processing') : t('carDetails.confirmBooking')}
+                    {isBooking ? (
+                      <span className="flex items-center gap-2">
+                        <Loader2 size={18} className="animate-spin" />
+                        {t('carDetails.processing')}
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-2">
+                        {t('carDetails.confirmBooking')}
+                        <ArrowRight size={18} className="transition-transform group-hover:translate-x-1" />
+                      </span>
+                    )}
                   </Button>
+
+                  {/* Trust badges */}
+                  <div className="flex items-center justify-center gap-4 text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <ShieldCheck size={12} className="text-green-500" />
+                      Secure payment
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <ShieldCheck size={12} className="text-green-500" />
+                      Verified host
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <ShieldCheck size={12} className="text-green-500" />
+                      24/7 support
+                    </span>
+                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -449,18 +529,29 @@ export const CarDetails = () => {
             initial={{ y: 100, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 100, opacity: 0 }}
-            className="fixed bottom-0 left-0 right-0 z-50 backdrop-blur-xl bg-white/90 border-t border-primary/10 shadow-2xl lg:hidden"
+            className="fixed bottom-0 left-0 right-0 z-50 backdrop-blur-xl bg-white/95 border-t border-primary/10 shadow-2xl lg:hidden"
           >
-            <div className="container mx-auto px-4 py-4">
-              <div className="flex items-center gap-4">
-                {days > 0 && (
-                  <div className="text-sm font-bold flex-1">
-                    <span className="text-muted-foreground">ETB {car.pricePerDay.toLocaleString()} x {days} days = </span>
-                    <span className="text-primary text-lg">ETB {totalAmount.toLocaleString()}</span>
-                  </div>
-                )}
-                <Button onClick={handleBookingClick} className="font-bold">
-                  {t('carDetails.bookNowBtn')}
+            <div className="container mx-auto px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  {days > 0 ? (
+                    <div className="flex flex-col">
+                      <span className="text-xs text-muted-foreground truncate">{car.make} {car.model} · {days} {days === 1 ? 'day' : 'days'}</span>
+                      <span className="text-lg font-extrabold text-primary">ETB {totalAmount.toLocaleString()}</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col">
+                      <span className="text-xs text-muted-foreground">{car.make} {car.model}</span>
+                      <span className="text-sm font-bold">ETB {car.pricePerDay.toLocaleString()}<span className="text-muted-foreground font-normal">/day</span></span>
+                    </div>
+                  )}
+                </div>
+                <Button
+                  onClick={handleBookingClick}
+                  className="h-12 px-6 rounded-2xl font-bold text-sm bg-gradient-to-r from-primary to-primary/80 shadow-lg shadow-primary/20 gap-2 shrink-0"
+                >
+                  {days > 0 ? t('carDetails.bookNowBtn') : 'Select Dates'}
+                  <ArrowRight size={16} />
                 </Button>
               </div>
             </div>
@@ -469,7 +560,7 @@ export const CarDetails = () => {
       </AnimatePresence>
 
       {/* Booking Flow Modal */}
-      <AnimatePresence>
+      <Suspense fallback={null}>
         {showBookingFlow && dateRange?.from && dateRange?.to && selectedPayment && (
           <BookingFlowModal
             carId={car.id}
@@ -481,7 +572,29 @@ export const CarDetails = () => {
             onClose={() => setShowBookingFlow(false)}
           />
         )}
-      </AnimatePresence>
+      </Suspense>
+
+      {/* Corporate Booking Modal */}
+      <Suspense fallback={null}>
+        {showCorporateBooking && (
+          <CorporateBookingModal
+            open={showCorporateBooking}
+            onClose={() => setShowCorporateBooking(false)}
+            car={{
+              id: car.id,
+              make: car.make,
+              model: car.model,
+              image: car.images?.[0] || undefined,
+              pricePerDay: car.pricePerDay,
+            }}
+            startDate={dateRange?.from}
+            endDate={dateRange?.to}
+            totalAmount={totalAmount}
+            paymentMethod={selectedPayment || undefined}
+            paymentMethodName={selectedPayment ? paymentMethods.find(m => m.id === selectedPayment)?.name : undefined}
+          />
+        )}
+      </Suspense>
 
       {/* Terms & Conditions Modal */}
       <Dialog open={showTermsModal} onOpenChange={setShowTermsModal}>

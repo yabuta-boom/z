@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { Eye, EyeOff, ArrowRight, Car, MapPin, ShieldCheck, Navigation } from "lucide-react";
+import { Eye, EyeOff, ArrowRight, MapPin, ShieldCheck, Navigation } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
@@ -64,9 +64,14 @@ const SignInCard = () => {
   const [name, setName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [isHovered, setIsHovered] = useState(false);
-  const [role, setRole] = useState<"renter" | "host">("renter");
+  const [role, setRole] = useState<"renter" | "host" | "corporate_renter">("renter");
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [companyName, setCompanyName] = useState("");
+  const [companyEmail, setCompanyEmail] = useState("");
+  const [companyPhone, setCompanyPhone] = useState("");
+  const [companyAddress, setCompanyAddress] = useState("");
+  const [registrantPosition, setRegistrantPosition] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
   const { user, profile, loading, login, signUp, signInWithEmail, demoSignIn } = useAuth();
@@ -74,10 +79,10 @@ const SignInCard = () => {
 
   useEffect(() => {
     if (user && !loading) {
-      if (profile?.role === 'renter') {
-        navigate('/');
-      } else {
+      if (profile?.role === 'host') {
         navigate('/host');
+      } else {
+        navigate('/');
       }
     }
   }, [user, profile, loading, navigate]);
@@ -95,6 +100,38 @@ const SignInCard = () => {
     setIsSubmitting(true);
     try {
       if (mode === "signup") {
+        if (role === "corporate_renter") {
+          const phoneRegex = /^\+251\d{9}$/;
+          if (!phoneRegex.test(companyPhone)) {
+            toast.error("Please enter a valid Ethiopian phone number (+251XXXXXXXXX)");
+            setIsSubmitting(false);
+            return;
+          }
+          if (!companyName || !registrantPosition || !companyAddress) {
+            toast.error("Please fill in all company fields");
+            setIsSubmitting(false);
+            return;
+          }
+          await signUp(companyEmail, password, name, companyPhone, role);
+          const { getCorporateProfiles, saveCorporateProfiles } = await import('../lib/fleetUtils');
+          const profiles = getCorporateProfiles();
+          const userId = 'user-' + Date.now();
+          profiles.push({
+            id: 'corp-' + Date.now(),
+            userId,
+            companyName,
+            registrantPosition,
+            renterFullName: name,
+            companyEmail,
+            companyPhone,
+            companyAddress,
+            createdAt: new Date().toISOString(),
+          });
+          saveCorporateProfiles(profiles);
+          toast.success("Company registered successfully!");
+          navigate("/");
+          return;
+        }
         // Basic phone validation for Ethiopia (+251 followed by 9 digits)
         const phoneRegex = /^\+251\d{9}$/;
         if (!phoneRegex.test(phoneNumber)) {
@@ -108,7 +145,7 @@ const SignInCard = () => {
         return;
       } else {
         // Demo login: intercept the specific demo credentials
-        if (email === 'yeabseramekbeb@gmail.com' && (password === '#1renter' || password === '#1Host')) {
+        if (email === 'yeabseramekbeb@gmail.com' && (password === '#1renter' || password === '#1Host' || password === '#1Company')) {
           await demoSignIn(email, password);
         } else {
           await signInWithEmail(email, password);
@@ -121,10 +158,10 @@ const SignInCard = () => {
       
       if (redirect) {
         navigate(redirect);
-      } else if (role === "renter") {
-        navigate("/");
-      } else {
+      } else if (password === '#1Host' || role === "host") {
         navigate("/host");
+      } else {
+        navigate("/");
       }
     } catch (error: any) {
       console.error("Auth error:", error);
@@ -151,6 +188,16 @@ const SignInCard = () => {
     setPhoneNumber(prefix + rest);
   };
 
+  const handleCorpPhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value;
+    if (!value.startsWith("+251")) {
+      value = "+251" + value.replace(/^\+?251?/, "");
+    }
+    const prefix = "+251";
+    const rest = value.slice(prefix.length).replace(/\D/g, "").slice(0, 9);
+    setCompanyPhone(prefix + rest);
+  };
+
   const handleGoogleLogin = async () => {
     try {
       localStorage.setItem('pendingRole', role);
@@ -162,10 +209,10 @@ const SignInCard = () => {
       
       if (redirect) {
         navigate(redirect);
-      } else if (role === "renter") {
-        navigate("/");
-      } else {
+      } else if (role === "host") {
         navigate("/host");
+      } else {
+        navigate("/");
       }
     } catch (error) {
       console.error("Login error:", error);
@@ -182,7 +229,7 @@ const SignInCard = () => {
         className="w-full max-w-4xl overflow-hidden rounded-2xl flex bg-white shadow-xl"
       >
         {/* Left side - Animation */}
-        <div className="hidden md:block w-1/2 h-[650px] relative overflow-hidden border-r border-gray-100">
+        <div className="hidden md:block w-1/2 relative overflow-hidden border-r border-gray-100">
           <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-primary/10">
             <SmartGPSRoad />
             
@@ -194,9 +241,11 @@ const SignInCard = () => {
                 transition={{ delay: 0.6, duration: 0.5 }}
                 className="mb-6"
               >
-                <div className="h-16 w-16 rounded-2xl bg-primary flex items-center justify-center shadow-2xl shadow-primary/30">
-                  <Car className="text-white h-8 w-8" strokeWidth={2.5} aria-hidden="true" />
-                </div>
+                <img 
+                  src="/images/zoelogo.png" 
+                  alt="Zoe Car Rental"
+                  className="h-16 w-auto drop-shadow-2xl"
+                />
               </motion.div>
               <motion.h2 
                 initial={{ opacity: 0, y: -20 }}
@@ -228,9 +277,7 @@ const SignInCard = () => {
             {/* Role Selection Tabs */}
             <div className="flex p-1 bg-gray-100 rounded-2xl mb-8">
               <button
-                onClick={() => {
-                  setRole("renter");
-                }}
+                onClick={() => setRole("renter")}
                 className={cn(
                   "flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-300",
                   role === "renter" ? "bg-white text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
@@ -239,9 +286,16 @@ const SignInCard = () => {
                 {t('login.rentACar')}
               </button>
               <button
-                onClick={() => {
-                  setRole("host");
-                }}
+                onClick={() => setRole("corporate_renter")}
+                className={cn(
+                  "flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-300",
+                  role === "corporate_renter" ? "bg-white text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                For Your Company
+              </button>
+              <button
+                onClick={() => setRole("host")}
                 className={cn(
                   "flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-xl transition-all duration-300",
                   role === "host" ? "bg-white text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
@@ -253,13 +307,17 @@ const SignInCard = () => {
 
             <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold uppercase tracking-tight mb-2 text-foreground">
               {mode === "signin" 
-                ? (role === "renter" ? t('login.findNextRide') : t('login.manageFleet'))
-                : t('login.createAccount')}
+                ? (role === "host" ? t('login.manageFleet') : role === "corporate_renter" ? t('login.corporateDashboard') : t('login.findNextRide'))
+                : (role === "corporate_renter" ? t('login.registerYourCompany') : t('login.createAccount'))}
             </h1>
             <p className="text-muted-foreground font-medium mb-2">
               {mode === "signin" 
-                ? `${t('login.signInTo')} ${role} ${t('login.account')}`
-                : `${t('login.joinZoe')} ${role}`}
+                ? (role === "renter" ? "Sign in to browse and book the perfect car for your next trip" 
+                    : role === "corporate_renter" ? "Sign in to manage your company's corporate rentals and fleet"
+                    : "Sign in to manage your fleet, approvals, and earnings")
+                : (role === "renter" ? "Create your account and start exploring our premium fleet"
+                    : role === "corporate_renter" ? "Register your company for tailored corporate rental solutions"
+                    : "List your vehicles and start earning with Zoe")}
             </p>
             <p className="text-[11px] font-bold uppercase tracking-wider text-yellow-600 mb-8">
               {t('login.rolePermanent')}
@@ -276,6 +334,10 @@ const SignInCard = () => {
                   <span className="font-bold text-blue-800">{t('login.host')}:</span>
                   <span className="text-blue-600">yeabseramekbeb@gmail.com / #1Host</span>
                 </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-blue-800">Corporate:</span>
+                  <span className="text-blue-600">yeabseramekbeb@gmail.com / #1Company</span>
+                </div>
               </div>
             </div>
             
@@ -289,7 +351,89 @@ const SignInCard = () => {
             </div>
             
             <form className="space-y-5" onSubmit={handleSubmit}>
-              {mode === "signup" && (
+              {mode === "signup" && role === "corporate_renter" && (
+                <>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Company Official Full Name
+                    </label>
+                    <Input
+                      type="text"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder="e.g. ABC Logistics PLC"
+                      required
+                      className="h-14 rounded-2xl bg-gray-50 border-transparent focus:bg-white focus:border-primary/20 transition-all font-bold px-6"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Registrant's Position / Job Title
+                    </label>
+                    <Input
+                      type="text"
+                      value={registrantPosition}
+                      onChange={(e) => setRegistrantPosition(e.target.value)}
+                      placeholder="e.g. Fleet Manager"
+                      required
+                      className="h-14 rounded-2xl bg-gray-50 border-transparent focus:bg-white focus:border-primary/20 transition-all font-bold px-6"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Renter Full Name
+                    </label>
+                    <Input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Person managing bookings"
+                      required
+                      className="h-14 rounded-2xl bg-gray-50 border-transparent focus:bg-white focus:border-primary/20 transition-all font-bold px-6"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Company Email
+                    </label>
+                    <Input
+                      type="email"
+                      value={companyEmail}
+                      onChange={(e) => setCompanyEmail(e.target.value)}
+                      placeholder="corporate@company.com"
+                      required
+                      className="h-14 rounded-2xl bg-gray-50 border-transparent focus:bg-white focus:border-primary/20 transition-all font-bold px-6"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Official Mobile Number
+                    </label>
+                    <Input
+                      type="tel"
+                      value={companyPhone}
+                      onChange={handleCorpPhoneChange}
+                      placeholder="+251XXXXXXXXX"
+                      required
+                      className="h-14 rounded-2xl bg-gray-50 border-transparent focus:bg-white focus:border-primary/20 transition-all font-bold px-6 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Company Registered Address
+                    </label>
+                    <Input
+                      type="text"
+                      value={companyAddress}
+                      onChange={(e) => setCompanyAddress(e.target.value)}
+                      placeholder="Bole, Addis Ababa, Ethiopia"
+                      required
+                      className="h-14 rounded-2xl bg-gray-50 border-transparent focus:bg-white focus:border-primary/20 transition-all font-bold px-6"
+                    />
+                  </div>
+                </>
+              )}
+              {mode === "signup" && role !== "corporate_renter" && (
                 <>
                   <div>
                     <label htmlFor="name" className="block text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">

@@ -1,4 +1,4 @@
-export type UserRole = 'renter' | 'host' | 'admin';
+export type UserRole = 'renter' | 'host' | 'admin' | 'corporate_renter';
 
 export interface UserProfile {
   id: string;
@@ -95,4 +95,64 @@ export interface Review {
   rating: number;
   comment: string;
   createdAt: string;
+}
+
+export interface CorporateProfile {
+  id: string;
+  userId: string;
+  companyName: string;
+  registrantPosition: string;
+  renterFullName: string;
+  companyEmail: string;
+  companyPhone: string;
+  companyAddress: string;
+  createdAt: string;
+}
+
+export interface CorporateDocument {
+  id: string;
+  type: 'legal_papers' | 'trade_license' | 'tin_certificate' | 'qualification_doc';
+  fileName: string;
+  fileData: string;
+  uploadedAt: string;
+}
+
+export interface CorporateBookingRequest {
+  id: string;
+  userId: string;
+  corporateProfileId: string;
+  carId: string;
+  carMake: string;
+  carModel: string;
+  carPlate: string;
+  carImage: string;
+  companyName: string;
+  bookingDepartment: string;
+  registrantPosition: string;
+  renterFullName: string;
+  renterAge: string;
+  renterAddress: string;
+  companyEmail: string;
+  companyPhone: string;
+  renterPhone?: string;
+  rentalPurpose?: string;
+  operatingArea?: string;
+  phoneVerified: boolean;
+  nationalIdVerified: boolean;
+  nationalIdFront: string;
+  nationalIdBack: string;
+  driverLicenseFront: string;
+  driverLicenseBack: string;
+  livenessPhoto: string;
+  documents: CorporateDocument[];
+  startDate?: string;
+  endDate?: string;
+  totalAmount?: number;
+  paymentMethod?: string;
+  insuranceAmount?: number;
+  status: 'pending_approval' | 'host_accepted' | 'bank_hold_active' | 'payment_completed' | 'rejected' | 'expired';
+  createdAt: string;
+  hostAcceptedAt?: string;
+  bankHoldApprovedAt?: string;
+  paymentCompletedAt?: string;
 }
